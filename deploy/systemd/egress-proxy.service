@@ -1,0 +1,35 @@
+[Unit]
+Description=Local FQDN egress proxy
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=egress-proxy
+Group=egress-proxy
+WorkingDirectory=/var/lib/local-ai-stack/egress-proxy
+Environment=PYTHONPATH=/opt/policy-gateway
+Environment=EGRESS_DESTINATIONS=/etc/local-ai-stack/egress-destinations.yaml
+Environment=EGRESS_PROXY_BIND=127.0.0.1
+Environment=EGRESS_PROXY_PORT=8888
+EnvironmentFile=-/etc/local-ai-stack/egress.env
+ExecStart=/opt/policy-gateway/venv/bin/python /usr/local/sbin/local-ai-egress-proxy
+Restart=on-failure
+RestartSec=2
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=
+UMask=0077
+ReadWritePaths=/var/lib/local-ai-stack/egress-proxy
+
+[Install]
+WantedBy=local-ai-stack.target

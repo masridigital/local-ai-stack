@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from dataclasses import dataclass, field
 
 from stack.audit import AuditLog
@@ -19,6 +20,10 @@ from stack.policy import (
     unexpected_params,
 )
 from stack.presidio_client import PresidioClient
+
+
+def _test_mode() -> bool:
+    return os.environ.get("LOCAL_AI_TEST_MODE", "").lower() in {"1", "true"}
 
 
 @dataclass
@@ -203,7 +208,11 @@ def handle_mcp(
     mock_result = None
     if isinstance(arguments, dict):
         arguments = dict(arguments)
-        mock_result = arguments.pop("_mock_result", None)
+        if "_mock_result" in arguments:
+            if not _test_mode():
+                audit.write(event_type="mcp", decision="block", user_id=user_id, route="/mcp", reason="mock_disabled")
+                raise PolicyError("mock_disabled", "mock results are test-only")
+            mock_result = arguments.pop("_mock_result")
     match = _mcp_server(server, policy)
     if match is None:
         audit.write(event_type="mcp", decision="block", user_id=user_id, route="/mcp", reason="mcp_not_allowlisted")

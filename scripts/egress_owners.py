@@ -13,7 +13,8 @@ from pathlib import Path
 
 import yaml
 
-NO_EGRESS_CANDIDATES = (
+# These users never dial off-host. Their HTTPS clients use the local proxy.
+DIRECT_DENY_USERS = (
     "presidio-analyzer",
     "presidio-anonymizer",
     "policy-gateway",
@@ -21,7 +22,9 @@ NO_EGRESS_CANDIDATES = (
     "caddy",
     "cloudflared",
     "litellm",
+    "openwebui",
 )
+PROXY_USER = "egress-proxy"
 
 # Open WebUI must not open a socket to LiteLLM. This runs before the loopback accept.
 LITELLM_DENY = (
@@ -88,7 +91,7 @@ def _hosts(item: dict, env: dict[str, str]) -> list[str]:
 
 def render_user_rules(raw: dict, env: dict[str, str] | None = None) -> str:
     lines = [
-        "# Host allowlist. install.sh installs these as owner-matched OUTPUT rules, not global allows.",
+        "# FQDN allowlist for the local egress proxy. These are not global firewall allows.",
         "# Optional hosts are added only when their env var is set. cloudflared stays off.",
         "default deny incoming",
         "default deny outgoing",
@@ -105,31 +108,29 @@ def render_user_rules(raw: dict, env: dict[str, str] | None = None) -> str:
 def render_owner_rules(raw: dict, resolutions: dict[str, list[str]], env: dict[str, str] | None = None) -> str:
     env = env or {}
     active = active_destinations(raw, env)
-    egress_users = {user for item in active for user in item["users"]}
     lines = [
-        "# Owner-matched OUTPUT rules. Block Open WebUI from LiteLLM, then loopback,",
-        "# then per-uid ACCEPTs for resolved addresses, then REJECT for users with no egress.",
-        "# install.sh inserts the resolved ACCEPT lines. Hostnames are not used here.",
+        "# Owner-matched OUTPUT rules. Service users are rejected off-host.",
+        "# Only the egress-proxy uid may open TCP/80 and TCP/443. The proxy checks the FQDN.",
+        "# Hostnames are comments here. They are not firewall matches.",
     ]
     for item in active:
         users = ",".join(item["users"])
         for host in _hosts(item, env):
             for port in _ports(item, env):
-                lines.append(f"# {users} -> {host}:{port}/{item['proto']}")
+                lines.append(f"# proxy for {users} -> {host}:{port}/{item['proto']}")
     lines.extend(LITELLM_DENY)
     lines.append("-A ufw-before-output -o lo -j ACCEPT")
-    for item in active:
-        for host in _hosts(item, env):
-            for ip in resolutions.get(host, []):
-                for user in item["users"]:
-                    for port in _ports(item, env):
-                        lines.append(
-                            f"-A ufw-before-output -m owner --uid-owner {user} -d {ip} -p {item['proto']} --dport {port} -j ACCEPT"
-                        )
-    for user in NO_EGRESS_CANDIDATES:
-        if user in egress_users:
-            continue
+    lines.append(
+        f"-A ufw-before-output -m owner --uid-owner {PROXY_USER} -p tcp --dport 80 -j ACCEPT"
+    )
+    lines.append(
+        f"-A ufw-before-output -m owner --uid-owner {PROXY_USER} -p tcp --dport 443 -j ACCEPT"
+    )
+    for user in DIRECT_DENY_USERS:
         lines.append(f"-A ufw-before-output -m owner --uid-owner {user} -j REJECT")
+    if resolutions:
+        # Resolved addresses are not installed. The proxy dials the name itself.
+        lines.append("# resolved addresses are ignored")
     return "\n".join(lines) + "\n"
 
 
@@ -183,8 +184,7 @@ def main() -> None:
     if args.owner_rules:
         args.owner_rules.write_text(render_owner_rules(raw, {}), encoding="utf-8")
     if args.apply_ufw:
-        resolutions = resolve_hosts(raw, env)
-        block = render_owner_rules(raw, resolutions, env)
+        block = render_owner_rules(raw, {}, env)
         before = Path("/etc/ufw/before.rules")
         before.write_text(splice_before_rules(before.read_text(encoding="utf-8"), block), encoding="utf-8")
 

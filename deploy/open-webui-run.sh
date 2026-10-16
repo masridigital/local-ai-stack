@@ -7,6 +7,11 @@ if [[ $- == *x* ]]; then
   exit 1
 fi
 
+if [[ "${MICROSOFT_CLIENT_ID:-}" == "00000000-0000-0000-0000-000000000000" ]]; then
+  echo "refusing zero-GUID MICROSOFT_CLIENT_ID" >&2
+  exit 1
+fi
+
 cred="${CREDENTIALS_DIRECTORY:?}"
 
 read_cred() {

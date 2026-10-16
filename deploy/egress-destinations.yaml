@@ -79,7 +79,7 @@ destinations:
     port: 443
     proto: tcp
     optional: true
-    purpose: Azure OpenAI resource hostname, US regions only (eastus2 or westus3 and the other US regions in policy.yaml)
+    purpose: Azure OpenAI host on the Presidio-gated path. The egress proxy dials this name only when AZURE_API_HOST is set. US regions only.
   - name: dns
     users: [systemd-resolve, root]
     env: DNS_SERVERS

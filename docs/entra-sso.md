@@ -12,7 +12,7 @@ Zitadel is an unused fallback and is not configured on this stack.
 4. App roles, value and display name the same: `phi`, `non-phi`, `admin`. Assign `phi` or `non-phi` for model access. Assign `admin` only to the operators who administer Open WebUI. `admin` alone does not grant a model team.
 5. Enterprise application: **Assignment required = Yes**. Scope that assignment to one security group, `PHI-users`. Do not assign the whole tenant. People get an account by being added to that group and given an app role. They cannot self-provision.
 6. Create a client secret in the vault. `deploy/install.sh` writes it to `/etc/open-webui/microsoft_client_secret` from `MICROSOFT_CLIENT_SECRET` (mode 0600). Do not put it in a unit file or in git.
-7. Set `MICROSOFT_CLIENT_ID` and `MICROSOFT_CLIENT_TENANT_ID` in `/etc/open-webui/config.env`. Do not set `AZURE_TENANT_ID` on Open WebUI. That name is LiteLLM Foundry only (`deploy/env/litellm.env`) and must be the same tenant. The committed Open WebUI file keeps a placeholder client id and the real tenant id. `OPENID_PROVIDER_URL` is `https://login.microsoftonline.com/f7812296-5bce-41dc-8102-b1b270e7c4c7/v2.0/.well-known/openid-configuration`.
+7. Set `MICROSOFT_CLIENT_ID` and `MICROSOFT_CLIENT_TENANT_ID` in `/etc/open-webui/config.env` before `deploy/install.sh --apply`. Do not set `AZURE_TENANT_ID` on Open WebUI. That name is LiteLLM Foundry only (`deploy/env/litellm.env`) and must be the same tenant. The committed file keeps the placeholder client id `00000000-0000-0000-0000-000000000000`. Apply and `open-webui-run.sh` both refuse that zero GUID. `OPENID_PROVIDER_URL` is `https://login.microsoftonline.com/f7812296-5bce-41dc-8102-b1b270e7c4c7/v2.0/.well-known/openid-configuration`.
 
 Conditional Access: require MFA for the app. Admins who can change the stack (the `localai` host group, LiteLLM master key holders, and the Entra `admin` app role) use a phishing-resistant method. Sign-in frequency 8 hours, matching `JWT_EXPIRES_IN=8h`.
 
@@ -48,4 +48,4 @@ There is no shared daily admin password in the repo.
 
 ## LiteLLM admin API
 
-LiteLLM binds `127.0.0.2:4000` and has no tunnel route. The master key is `/etc/litellm/litellm_master_key`. An admin on the VPN can open a local SSH forward only: `ssh -L 4000:127.0.0.2:4000`. `AllowTcpForwarding local` and `PermitOpen 127.0.0.2:4000` allow that and refuse remote forwarding and every other destination.
+LiteLLM binds `127.0.0.2:4000` and has no tunnel route. The master key is `/etc/litellm/litellm_master_key`. An admin on the VPN can open a local SSH forward only: `ssh -L 4000:127.0.0.2:4000`. `AllowTcpForwarding local` and `PermitOpen 127.0.0.2:4000` allow that. `PermitTunnel no` and `AllowStreamLocalForwarding no` refuse tun devices and local socket forwarding. Remote TCP forwarding stays closed.

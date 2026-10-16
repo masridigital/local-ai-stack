@@ -72,6 +72,7 @@ create_user presidio-anonymizer /var/lib/local-ai-stack/presidio-anonymizer
 create_user litellm /var/lib/local-ai-stack/litellm
 create_user policy-gateway /var/lib/local-ai-stack/policy-gateway
 create_user openwebui /var/lib/local-ai-stack/webui
+create_user egress-proxy /var/lib/local-ai-stack/egress-proxy
 
 install -d -m 0755 \
   /opt/local-ai-stack \
@@ -122,6 +123,11 @@ install_config() {
 install_config "$ROOT/deploy/env/litellm.env" /etc/litellm/config.env
 install_config "$ROOT/deploy/env/policy-gateway.env" /etc/policy-gateway/config.env
 install_config "$ROOT/deploy/env/open-webui.env" /etc/open-webui/config.env
+microsoft_client_id="$(awk -F= '$1=="MICROSOFT_CLIENT_ID" { print $2 }' /etc/open-webui/config.env)"
+if [[ "$microsoft_client_id" == "00000000-0000-0000-0000-000000000000" ]]; then
+  echo "refusing zero-GUID MICROSOFT_CLIENT_ID" >&2
+  exit 1
+fi
 
 if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -q "Status: active"; then
   # Re-running apply on a locked host needs pip and the model hosts, then drops them.
@@ -161,7 +167,8 @@ if [[ "${ALLOW_EMBEDDING_DOWNLOAD:-1}" == "1" ]] && [[ ! -d /var/lib/local-ai-st
 fi
 
 bash "$ROOT/host/secrets/populate.sh"
-# Anthropic key and its egress rule exist only while the BAA switch is on.
+# One pass for the Anthropic key. Stop LiteLLM before the file changes so a
+# running process cannot keep LoadCredential bytes after the file is removed.
 baa_stamp=/var/lib/local-ai-stack/litellm/baa-switch
 baa_previous=false
 if [[ -f "$baa_stamp" ]]; then
@@ -170,11 +177,16 @@ fi
 baa_current=false
 if [[ "${ANTHROPIC_BAA_ENABLED:-false}" == "true" ]]; then
   baa_current=true
+fi
+if systemctl cat litellm.service >/dev/null 2>&1; then
+  systemctl stop litellm.service
+fi
+if [[ "$baa_current" == "true" ]]; then
   bash "$ROOT/deploy/write-secret.sh" /etc/litellm/anthropic_api_key ANTHROPIC_API_KEY
 else
   rm -f /etc/litellm/anthropic_api_key
 fi
-bash "$ROOT/deploy/write-secret.sh" /etc/cloudflared/credentials.json CLOUDFLARED_CREDENTIALS_JSON
+rm -f /etc/cloudflared/credentials.json
 
 bind_postgres_data() {
   local dest="/var/lib/local-ai-stack/postgres"
@@ -291,11 +303,17 @@ install -m 0755 "$ROOT/deploy/egress-refresh.sh" /usr/local/sbin/local-ai-egress
 sed "s|@LOCAL_AI_ROOT@|$ROOT|g" "$ROOT/deploy/systemd/local-ai-egress-refresh.service" \
   > /etc/systemd/system/local-ai-egress-refresh.service
 install -m 0644 "$ROOT/deploy/systemd/local-ai-egress-refresh.timer" /etc/systemd/system/local-ai-egress-refresh.timer
+install -d -m 0750 -o egress-proxy -g egress-proxy /var/lib/local-ai-stack/egress-proxy
+install -m 0755 "$ROOT/deploy/egress-proxy.py" /usr/local/sbin/local-ai-egress-proxy
+install -m 0644 "$ROOT/deploy/egress-destinations.yaml" /etc/local-ai-stack/egress-destinations.yaml
+install -m 0644 "$ROOT/deploy/systemd/egress-proxy.service" /etc/systemd/system/egress-proxy.service
+python3 "$ROOT/scripts/egress_nft.py" | nft -f -
 systemctl daemon-reload
 systemctl enable postgresql.service
 systemctl enable presidio-analyzer.service
 systemctl enable presidio-anonymizer.service
 systemctl enable litellm.service
+systemctl enable egress-proxy.service
 systemctl enable policy-gateway.service
 systemctl enable open-webui.service
 systemctl enable caddy.service
@@ -312,7 +330,8 @@ systemctl restart systemd-journald || true
 systemctl enable auditd || true
 systemctl enable --now local-ai-egress-refresh.timer
 
-systemctl restart litellm.service
+systemctl restart egress-proxy.service
+systemctl start litellm.service
 litellm_up=0
 for _ in $(seq 1 60); do
   if curl -fsS --max-time 2 http://127.0.0.2:4000/health/liveliness >/dev/null; then

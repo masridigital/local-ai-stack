@@ -1,4 +1,4 @@
-# Host allowlist. install.sh installs these as owner-matched OUTPUT rules, not global allows.
+# FQDN allowlist for the local egress proxy. These are not global firewall allows.
 # Optional hosts are added only when their env var is set. cloudflared stays off.
 default deny incoming
 default deny outgoing

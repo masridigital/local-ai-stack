@@ -1,20 +1,30 @@
 # Egress hostnames
 
-systemd `IPAddressAllow` ignores hostnames, and a one-time DNS lookup goes stale when a CDN rotates the address. Two controls cover that.
+Off-host TCP from this host goes through a local forward proxy. The proxy allows destinations by FQDN. nftables allows only the `egress-proxy` user to open TCP/80 and TCP/443. Service users talk to `127.0.0.1:8888` and are rejected if they dial anywhere else.
 
-## What this tree does now
+## Proxy
 
-`local-ai-egress-refresh.timer` runs `deploy/egress-refresh.sh` two minutes after boot and every five minutes after that. The script clears `INSTALL_EGRESS`, resolves the active destinations, splices the owner rules in front of UFW’s loopback OUTPUT accept, and reloads UFW. `ANTHROPIC_BAA_ENABLED` and `AZURE_API_HOST` come from `/etc/local-ai-stack/egress.env`, which `install.sh` rewrites on each apply. The Anthropic destination stays absent unless that switch is `true`.
+`egress-proxy.service` runs `deploy/egress-proxy.py` as `egress-proxy` on `127.0.0.1:8888`. It loads `deploy/egress-destinations.yaml` and `/etc/local-ai-stack/egress.env`.
 
-That timer is the interim control. It is not a hostname allowlist. A lookup that changes between runs is allowed until the next run, and a name that briefly resolves to an unexpected address is allowed for that interval.
+Allowed names:
 
-## Follow-up, still a deploy blocker
+- Entra: `login.microsoftonline.com` and `login.microsoft.com` on port 443.
+- Anthropic: `api.anthropic.com` only when `ANTHROPIC_BAA_ENABLED=true`.
+- The Azure OpenAI host on the Presidio-gated path: `AZURE_API_HOST` when it is set, and only if the name ends in `.openai.azure.com`.
 
-Before PHI, replace the resolved address list with a local forward proxy that allows destinations by name:
+IP literals are refused. A name that is not on the list is refused before the proxy dials it.
 
-- The proxy listens on a loopback port. Its configuration is the FQDN allowlist in `deploy/egress-destinations.yaml`, including the same BAA and install-time gates.
-- LiteLLM, Open WebUI, and root apt use that proxy (`HTTP_PROXY` / `HTTPS_PROXY`). Their units accept only the proxy address.
-- The proxy user is the only uid that may open off-host connections, and it checks the TLS SNI or HTTP host against the allowlist before connecting.
-- UFW then default-denies the service users without embedding CDN addresses.
+LiteLLM, Open WebUI, and the Presidio analyzer set `https_proxy` to that listener. `NO_PROXY` keeps loopback traffic (Presidio, the gateway, Postgres, LiteLLM) off the proxy.
 
-Until that proxy is in place, do not treat the stack as ready for PHI. The refresh timer is what keeps the current rules from freezing an old address.
+## Firewall
+
+`scripts/egress_nft.py` renders table `inet local_ai_egress`:
+
+- established traffic is accepted
+- TCP/4000 to `127.0.0.2` and `127.0.0.1` is rejected before the loopback accept
+- other loopback traffic is accepted
+- TCP/80 and TCP/443 are accepted only for uid `egress-proxy`
+
+UFW stays default deny. Owner rules reject `litellm`, `openwebui`, and the other service users. They accept off-host TCP only for `egress-proxy`. `local-ai-egress-refresh.timer` reloads that table and restarts the proxy. It does not pin CDN addresses.
+
+NTP is not an HTTP CONNECT flow. It is not opened by this table.

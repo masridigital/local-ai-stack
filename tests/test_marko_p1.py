@@ -79,6 +79,11 @@ def test_open_webui_entra_group_and_no_first_admin():
     ssh = (ROOT / "host" / "ssh" / "00-local-ai-vpn.conf").read_text(encoding="utf-8")
     assert "AllowTcpForwarding local" in ssh
     assert "PermitOpen 127.0.0.2:4000" in ssh
+    assert "PermitTunnel no" in ssh
+    assert "AllowStreamLocalForwarding no" in ssh
+    other = (ROOT / "deploy" / "ssh" / "99-local-ai.conf").read_text(encoding="utf-8")
+    assert "PermitTunnel no" in other
+    assert "AllowStreamLocalForwarding no" in other
     assert "AllowTcpForwarding no" not in ssh
     assert "ssh -L 4000:127.0.0.2:4000" in doc
 
@@ -346,14 +351,19 @@ def test_anthropic_dropin_follows_the_switch(tmp_path):
     assert off.returncode == 0, off.stderr
     assert not (dest / "10-anthropic.conf").exists()
     install = (ROOT / "deploy" / "install.sh").read_text(encoding="utf-8")
+    stop = install.index("systemctl stop litellm.service")
+    delete = install.index("rm -f /etc/litellm/anthropic_api_key")
     dropin = install.index("litellm-baa-dropin.sh")
     reload = install.index("systemctl daemon-reload")
-    restart = install.index("systemctl restart litellm.service")
+    start = install.index("systemctl start litellm.service")
     health = install.index("http://127.0.0.2:4000/health/liveliness")
     scope = install.index("scope_virtual_key.py")
-    assert dropin < reload < restart < health < scope
+    assert stop < delete < dropin < reload < start < health < scope
+    assert "systemctl restart litellm.service" not in install
     assert '[[ "$baa_previous" != "$baa_current" ]]' in install
     assert install.index("SCOPE_VIRTUAL_KEY_FORCE=1") < scope
+    assert "write-secret.sh\" /etc/cloudflared/credentials.json" not in install
+    assert "rm -f /etc/cloudflared/credentials.json" in install
 
 
 def test_reject_is_spliced_before_loopback_accept():
@@ -384,7 +394,8 @@ def test_user_groups_header_stays_comma_separated():
     timer = (ROOT / "deploy" / "systemd" / "local-ai-egress-refresh.timer").read_text(encoding="utf-8")
     assert "OnUnitActiveSec=5min" in timer
     design = (ROOT / "docs" / "egress-proxy.md").read_text(encoding="utf-8")
-    assert "deploy blocker" in design.lower() or "Deploy blocker" in design or "still a deploy blocker" in design
+    assert "egress-proxy" in design
+    assert "127.0.0.1:8888" in design
 
 
 def test_litellm_port_4000_is_gated():
@@ -459,6 +470,15 @@ def test_nft_rejects_litellm_before_loopback_accept():
     loopback = rules.index('oifname "lo" accept')
     assert rules.index("ip daddr 127.0.0.2 tcp dport 4000 reject") < loopback
     assert rules.index("ip daddr 127.0.0.1 tcp dport 4000 reject") < loopback
+    proxy_accept = rules.index("meta skuid egress-proxy tcp dport { 80, 443 } accept")
+    assert proxy_accept > loopback
+    assert rules.count("meta skuid") == 1
+    subprocess.run(
+        ["sudo", "useradd", "--system", "--shell", "/usr/sbin/nologin", "egress-proxy"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
     checked = subprocess.run(
         ["sudo", "nft", "-c", "-f", "-"],
         input=rules,
@@ -607,6 +627,88 @@ def test_gateway_strips_forwarded_name_and_email(monkeypatch):
     assert "x-openwebui-user-name" not in recorded
     assert "x-openwebui-user-email" not in recorded
     assert recorded.get("x-litellm-team-id") == "phi"
+
+
+def test_proxy_connects_only_to_allowlisted_names():
+    import socket
+
+    from stack.egress import load_destinations
+    from stack.egress_proxy import EgressProxy, connect_allowed
+
+    raw = load_destinations(ROOT / "deploy" / "egress-destinations.yaml")
+    assert connect_allowed("login.microsoftonline.com", 443, raw, {})
+    assert connect_allowed("login.microsoft.com", 443, raw, {})
+    assert not connect_allowed("api.anthropic.com", 443, raw, {})
+    assert connect_allowed("api.anthropic.com", 443, raw, {"ANTHROPIC_BAA_ENABLED": "true"})
+    assert not connect_allowed("cap-eastus2.openai.azure.com", 443, raw, {})
+    assert connect_allowed(
+        "cap-eastus2.openai.azure.com",
+        443,
+        raw,
+        {"AZURE_API_HOST": "cap-eastus2.openai.azure.com"},
+    )
+    assert not connect_allowed("192.0.2.10", 443, raw, {"AZURE_API_HOST": "cap-eastus2.openai.azure.com"})
+    assert not connect_allowed("example.com", 443, raw, {})
+    dialed: list[tuple[str, int]] = []
+
+    def connect(host: str, port: int):
+        dialed.append((host, port))
+        left, right = socket.socketpair()
+        right.close()
+        return left
+
+    proxy = EgressProxy(
+        raw,
+        {"ANTHROPIC_BAA_ENABLED": "true", "AZURE_API_HOST": "cap-eastus2.openai.azure.com"},
+        connect=connect,
+    )
+    thread = threading.Thread(target=proxy.serve_forever, daemon=True)
+    thread.start()
+
+    def request(target: str) -> bytes:
+        sock = socket.create_connection(("127.0.0.1", proxy.port), timeout=2)
+        sock.sendall(f"CONNECT {target} HTTP/1.1\r\nHost: {target}\r\n\r\n".encode())
+        data = b""
+        while b"\r\n" not in data:
+            chunk = sock.recv(256)
+            if not chunk:
+                break
+            data += chunk
+        sock.close()
+        return data
+
+    try:
+        assert request("login.microsoftonline.com:443").startswith(b"HTTP/1.1 200")
+        assert request("api.anthropic.com:443").startswith(b"HTTP/1.1 200")
+        assert request("cap-eastus2.openai.azure.com:443").startswith(b"HTTP/1.1 200")
+        assert request("example.com:443").startswith(b"HTTP/1.1 403")
+        assert request("192.0.2.10:443").startswith(b"HTTP/1.1 403")
+    finally:
+        proxy.close()
+    assert ("example.com", 443) not in dialed
+    assert ("login.microsoftonline.com", 443) in dialed
+    assert ("api.anthropic.com", 443) in dialed
+    assert ("cap-eastus2.openai.azure.com", 443) in dialed
+    litellm = (ROOT / "deploy" / "systemd" / "litellm.service").read_text(encoding="utf-8")
+    webui = (ROOT / "deploy" / "systemd" / "open-webui.service").read_text(encoding="utf-8")
+    analyzer = (ROOT / "deploy" / "systemd" / "presidio-analyzer.service").read_text(encoding="utf-8")
+    for unit in (litellm, webui, analyzer):
+        assert "HTTPS_PROXY=http://127.0.0.1:8888" in unit
+
+
+def test_open_webui_refuses_zero_client_id():
+    env = os.environ.copy()
+    env["MICROSOFT_CLIENT_ID"] = "00000000-0000-0000-0000-000000000000"
+    proc = subprocess.run(
+        ["bash", str(ROOT / "deploy" / "open-webui-run.sh")],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert proc.returncode == 1
+    assert "refusing zero-GUID MICROSOFT_CLIENT_ID" in proc.stderr
+    assert "refusing zero-GUID MICROSOFT_CLIENT_ID" in (ROOT / "deploy" / "install.sh").read_text(encoding="utf-8")
 
 
 def test_least_privilege_is_not_claimed_tested_here():

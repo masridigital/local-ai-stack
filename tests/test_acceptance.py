@@ -214,7 +214,7 @@ def test_04_untested_routes_rejected(path, policy, presidio_services, audit):
     assert upstream.calls == []
 
 
-def test_05_pre_mcp_call(policy, presidio_services, audit, recognizers):
+def test_05_pre_mcp_call(policy, presidio_services, audit, recognizers, monkeypatch):
     client, _, _ = presidio_services
     allowed = replace(
         policy,
@@ -223,16 +223,18 @@ def test_05_pre_mcp_call(policy, presidio_services, audit, recognizers):
         ),
     )
     upstream = McpUpstream()
+    monkeypatch.setenv("LOCAL_AI_TEST_MODE", "true")
     result = handle_mcp(
-        server="stackjack-readonly",
-        tool="list_tickets",
-        arguments={"query": "MRN-SYN-0001234 for Testy McFakerson", "_mock_result": RAW_RESPONSE},
-        user_id=USER,
-        policy=allowed,
-        presidio=client,
-        upstream=upstream,
-        audit=audit,
-    )
+            server="stackjack-readonly",
+            tool="list_tickets",
+            arguments={"query": "MRN-SYN-0001234 for Testy McFakerson", "_mock_result": RAW_RESPONSE},
+            user_id=USER,
+            policy=allowed,
+            presidio=client,
+            upstream=upstream,
+            audit=audit,
+        )
+    monkeypatch.delenv("LOCAL_AI_TEST_MODE", raising=False)
     assert len(upstream.calls) == 1
     sent = json.dumps(upstream.calls[0]["arguments"])
     assert "MRN-SYN-0001234" not in sent
@@ -254,6 +256,31 @@ def test_05_pre_mcp_call(policy, presidio_services, audit, recognizers):
         )
     assert exc.value.code == "mcp_not_allowlisted"
     assert blocked.calls == []
+
+
+def test_mock_result_is_refused_outside_test_mode(policy, presidio_services, audit, monkeypatch):
+    monkeypatch.delenv("LOCAL_AI_TEST_MODE", raising=False)
+    client, _, _ = presidio_services
+    allowed = replace(
+        policy,
+        mcp_allowed_upstreams=(
+            {"server": "stackjack-readonly", "kind": "stackjack", "tool": "list_tickets"},
+        ),
+    )
+    upstream = McpUpstream()
+    with pytest.raises(PolicyError) as exc:
+        handle_mcp(
+            server="stackjack-readonly",
+            tool="list_tickets",
+            arguments={"query": "hello", "_mock_result": "should-not-return"},
+            user_id=USER,
+            policy=allowed,
+            presidio=client,
+            upstream=upstream,
+            audit=audit,
+        )
+    assert exc.value.code == "mock_disabled"
+    assert upstream.calls == []
 
 
 def test_06_audit_has_user_and_no_raw_phi(policy, presidio_services, audit, recognizers):
@@ -500,14 +527,16 @@ def test_egress_default_deny():
     install_rules = render_user_rules(raw, {"INSTALL_EGRESS": "1"})
     assert "pypi.org" in install_rules
     owner = render_owner_rules(raw, {"api.anthropic.com": ["192.0.2.10"]}, {"ANTHROPIC_BAA_ENABLED": "true"})
-    assert "--uid-owner litellm" in owner
-    assert "192.0.2.10" in owner
+    assert "--uid-owner egress-proxy" in owner
+    assert "--uid-owner litellm -j REJECT" in owner
+    assert "192.0.2.10" not in owner
     assert "127.0.0.2" in owner
     assert owner.index("openwebui") < owner.index("-o lo -j ACCEPT")
     assert "--uid-owner policy-gateway -j REJECT" in owner
     opened = render_owner_rules(raw, {"mcp.example": ["192.0.2.20"]}, {"STACKJACK_MCP_HOST": "mcp.example"})
-    assert "policy-gateway -j REJECT" not in opened
-    assert "--uid-owner policy-gateway" in opened
+    assert "policy-gateway -j REJECT" in opened
+    assert "mcp.example" in opened
+    assert "--uid-owner policy-gateway -d" not in opened
 
 
 def test_gateway_forwards_litellm_names_and_masks_fields(policy, presidio_services, audit):
