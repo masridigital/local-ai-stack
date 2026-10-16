@@ -1,0 +1,18 @@
+[Unit]
+Description=Alert when a restic backup or restore test fails
+
+[Service]
+Type=oneshot
+# Default route writes to the journal (journalctl -t local-ai-restic).
+# alert.env may select local mail or an executable hook. This unit never
+# loads the restic password and denies every network address.
+EnvironmentFile=-/etc/restic/alert.env
+ExecStart=/usr/local/sbin/local-ai-restic-alert
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+CapabilityBoundingSet=
+RestrictAddressFamilies=AF_UNIX
+IPAddressDeny=any
+UMask=0077

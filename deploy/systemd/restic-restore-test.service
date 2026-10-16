@@ -1,0 +1,23 @@
+[Unit]
+Description=Quarterly restic restore test
+Requires=restic-backup.service
+After=restic-backup.service
+OnFailure=restic-failure.service
+
+[Service]
+Type=oneshot
+Environment=HOME=/var/lib/local-ai-stack/backups
+EnvironmentFile=/etc/restic/local-ai.env
+ExecStart=/usr/local/sbin/local-ai-restic-restore-test
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/lib/local-ai-stack/backups
+CapabilityBoundingSet=
+RestrictAddressFamilies=AF_UNIX
+IPAddressDeny=any
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

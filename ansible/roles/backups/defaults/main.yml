@@ -1,0 +1,36 @@
+---
+# Password is never given a default. Pass backups_password from Ansible Vault.
+# Timers stay disabled until that value is present. The role does not fail
+# the rest of the site when the password is still empty.
+# The password file is written mode 0600 and owned by root. A missing, empty,
+# or loose file makes the backup and restore-test scripts exit non-zero.
+# backups_extra_env may only set the keys in backups_extra_env_allow.
+# It cannot set RESTIC_PASSWORD, RESTIC_PASSWORD_COMMAND, or a repository URL.
+# The repository is a local absolute path on dm-crypt. The backup script
+# refuses to run unless check_luks.py reports that path is on a crypt device.
+# Off-host repository URLs are refused: restic has no egress rule.
+# A second local absolute path may be set in backups_offsite_repository.
+# A failed backup starts restic-failure.service. The default route writes
+# to the journal. backups_alert_route may be journal, mail (local recipient
+# only), or hook (an executable absolute path). The route is not given the
+# restic password and the unit denies every network address.
+# Chat snapshots use keep-within 30d. Audit snapshots use keep-within 6y.
+# The quarterly timer restores the audit tag only.
+backups_password: ""
+backups_repository: /var/lib/local-ai-stack/backups/repo
+backups_offsite_repository: ""
+backups_password_file: /etc/restic/password
+backups_env_file: /etc/restic/local-ai.env
+backups_alert_env_file: /etc/restic/alert.env
+backups_keep_within_ephi: 30d
+backups_keep_within_audit: 6y
+backups_extra_env: {}
+backups_extra_env_allow:
+  - RESTIC_COMPRESSION
+  - RESTIC_PACK_SIZE
+  - RESTIC_PROGRESS_FPS
+  - RESTIC_READ_CONCURRENCY
+  - RESTIC_CACHE_DIR
+backups_alert_route: journal
+backups_alert_mail: ""
+backups_alert_hook: ""
