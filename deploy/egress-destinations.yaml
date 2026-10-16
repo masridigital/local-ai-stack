@@ -1,5 +1,4 @@
 default: deny
-cloudflared_enabled: false
 destinations:
   - name: anthropic-api
     users: [litellm]

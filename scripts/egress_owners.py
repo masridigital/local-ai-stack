@@ -20,7 +20,6 @@ DIRECT_DENY_USERS = (
     "policy-gateway",
     "postgres",
     "caddy",
-    "cloudflared",
     "litellm",
     "openwebui",
 )
@@ -92,7 +91,7 @@ def _hosts(item: dict, env: dict[str, str]) -> list[str]:
 def render_user_rules(raw: dict, env: dict[str, str] | None = None) -> str:
     lines = [
         "# FQDN allowlist for the local egress proxy. These are not global firewall allows.",
-        "# Optional hosts are added only when their env var is set. cloudflared stays off.",
+        "# Optional hosts are added only when their env var is set. cloudflared is not installed.",
         "default deny incoming",
         "default deny outgoing",
     ]

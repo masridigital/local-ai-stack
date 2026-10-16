@@ -159,9 +159,14 @@ def handle_chat(
         {key: value for key, value in forward.items() if key == "_mock_response" or not key.startswith("_")},
         team_id=team_id or None,
     )
-    content = _assistant_text(raw)
+    choice_text = _choice_texts(raw)
+    masked_contents: list[str] = []
+    response_entities: list[str] = []
     try:
-        masked_content, response_entities = presidio.mask_text(content)
+        for content in choice_text:
+            masked_content, found = presidio.mask_text(content)
+            masked_contents.append(masked_content)
+            response_entities.extend(found)
     except (PresidioUnavailable, PolicyError) as exc:
         audit.write(
             event_type="request",
@@ -176,6 +181,7 @@ def handle_chat(
         )
         raise PolicyError("presidio_unavailable", "response blocked because post-call masking failed", status=503) from exc
     prompt_redacted = _join_content(masked_messages)
+    response_redacted = "\n".join(masked_contents)
     audit.write(
         event_type="request",
         decision="allow",
@@ -185,11 +191,9 @@ def handle_chat(
         model=model,
         entity_types=sorted(set(entities + response_entities)),
         prompt_redacted=prompt_redacted,
-        response_redacted=masked_content,
+        response_redacted=response_redacted,
     )
-    raw["choices"][0]["message"]["content"] = masked_content
-    raw.pop("usage", None)
-    return ChatResult(status=200, body=raw, backend=backend)
+    return ChatResult(status=200, body=_public_completion(raw, masked_contents), backend=backend)
 
 
 def handle_mcp(
@@ -326,14 +330,55 @@ def _mask_obj(value, presidio: PresidioClient):
     raise PolicyError("non_text_blocked", "unsupported JSON value")
 
 
-def _assistant_text(raw: dict) -> str:
-    try:
-        content = raw["choices"][0]["message"]["content"]
-    except (KeyError, IndexError, TypeError) as exc:
-        raise PolicyError("upstream_invalid", "upstream response has no assistant text", status=502) from exc
-    if not isinstance(content, str):
-        raise PolicyError("non_text_blocked", "upstream content is not text", status=502)
-    return content
+def _choice_texts(raw: dict) -> list[str]:
+    choices = raw.get("choices")
+    if not isinstance(choices, list) or not choices:
+        raise PolicyError("upstream_invalid", "upstream response has no assistant text", status=502)
+    texts: list[str] = []
+    for choice in choices:
+        if not isinstance(choice, dict):
+            raise PolicyError("upstream_invalid", "upstream response has no assistant text", status=502)
+        message = choice.get("message")
+        if not isinstance(message, dict):
+            raise PolicyError("upstream_invalid", "upstream response has no assistant text", status=502)
+        content = message.get("content")
+        if not isinstance(content, str):
+            raise PolicyError("non_text_blocked", "upstream content is not text", status=502)
+        texts.append(content)
+    return texts
+
+
+def _public_completion(raw: dict, masked_contents: list[str]) -> dict:
+    """Return an allowlisted completion. Extra choice fields are not copied."""
+    choices = []
+    originals = raw["choices"]
+    for index, content in enumerate(masked_contents):
+        original = originals[index]
+        message = original["message"]
+        role = message.get("role")
+        if not isinstance(role, str) or not role:
+            role = "assistant"
+        finish = original.get("finish_reason")
+        if not isinstance(finish, str):
+            finish = "stop"
+        choice_index = original.get("index")
+        if not isinstance(choice_index, int):
+            choice_index = index
+        choices.append(
+            {
+                "index": choice_index,
+                "message": {"role": role, "content": content},
+                "finish_reason": finish,
+            }
+        )
+    body: dict = {"object": "chat.completion", "choices": choices}
+    completion_id = raw.get("id")
+    if isinstance(completion_id, str):
+        body["id"] = completion_id
+    model = raw.get("model")
+    if isinstance(model, str):
+        body["model"] = model
+    return body
 
 
 def _join_content(messages: list) -> str:

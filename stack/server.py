@@ -137,6 +137,19 @@ class Handler(BaseHTTPRequestHandler):
         except PolicyError as exc:
             self._send(exc.status, {"error": {"code": exc.code, "message": exc.message}})
             return
+        except Exception:
+            try:
+                audit.write(
+                    event_type="request",
+                    decision="block",
+                    user_id=user_id,
+                    route=self.path.split("?", 1)[0],
+                    reason="unhandled",
+                )
+            except Exception:
+                pass
+            self._send(500, {"error": {"code": "unhandled", "message": "request failed"}})
+            return
         self._send(result.status, result.body)
 
     def log_message(self, fmt: str, *args) -> None:

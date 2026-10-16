@@ -8,7 +8,7 @@ The VM disk is LUKS at install, or a LUKS volume is mounted at `/var/lib/local-a
 | `/var/lib/local-ai-stack/webui` | Open WebUI SQLite, chat history, uploads, vector index, local embedding cache | ePHI. Raw prompts live here until the 30-day purge |
 | `/var/lib/local-ai-stack/backups` | restic or borg repository cache | Encrypted again by the backup tool |
 | `/var/lib/local-ai-stack/certs` | LAN TLS key | Private key mode 0600 |
-| `/etc/open-webui`, `/etc/litellm`, `/etc/policy-gateway`, `/etc/postgres`, `/etc/cloudflared` | Credential files | Mode 0700 directory, 0600 files, root. Loaded with `LoadCredential` |
+| `/etc/open-webui`, `/etc/litellm`, `/etc/policy-gateway`, `/etc/postgres` | Credential files | Mode 0700 directory, 0600 files, root. Loaded with `LoadCredential` |
 
 Open WebUI’s search index is inside the webui directory. There is no external embedding API at runtime. The MiniLM weights are fetched once during apply, as root, into `HF_HOME` on this volume. Uploads are disabled; the directory is still encrypted because a future admin toggle must not land files on an open disk.
 

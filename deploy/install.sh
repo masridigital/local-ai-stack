@@ -76,7 +76,14 @@ apt-get install -y \
 
 bash "$ROOT/deploy/apt-repos.sh"
 apt-get update
-apt-get install -y caddy cloudflared
+apt-get install -y caddy
+if dpkg -s cloudflared >/dev/null 2>&1; then
+  apt-get remove -y cloudflared
+fi
+rm -f /etc/apt/sources.list.d/cloudflared.list /usr/share/keyrings/cloudflare-main.gpg
+systemctl disable --now cloudflared.service || true
+rm -f /etc/systemd/system/cloudflared.service
+rm -rf /etc/cloudflared
 
 create_user() {
   local name="$1"
@@ -102,8 +109,7 @@ install -d -m 0755 \
   /opt/open-webui \
   /var/lib/local-ai-stack \
   /var/lib/local-ai-stack/backups \
-  /var/lib/local-ai-stack/certs \
-  /etc/cloudflared
+  /var/lib/local-ai-stack/certs
 
 install -d -m 0700 -o presidio-analyzer -g presidio-analyzer /var/lib/local-ai-stack/presidio-analyzer
 install -d -m 0700 -o presidio-anonymizer -g presidio-anonymizer /var/lib/local-ai-stack/presidio-anonymizer
@@ -249,12 +255,12 @@ install -m 0644 "$ROOT/deploy/systemd/open-webui.service" /etc/systemd/system/op
 install -m 0644 "$ROOT/deploy/systemd/local-ai-stack.target" /etc/systemd/system/local-ai-stack.target
 install -m 0644 "$ROOT/deploy/systemd/local-ai-retention.service" /etc/systemd/system/local-ai-retention.service
 install -m 0644 "$ROOT/deploy/systemd/local-ai-retention.timer" /etc/systemd/system/local-ai-retention.timer
-install -m 0644 "$ROOT/deploy/systemd/cloudflared.service" /etc/systemd/system/cloudflared.service
+install -m 0644 "$ROOT/deploy/systemd/local-ai-store-purge.service" /etc/systemd/system/local-ai-store-purge.service
+install -m 0644 "$ROOT/deploy/systemd/local-ai-store-purge.timer" /etc/systemd/system/local-ai-store-purge.timer
 install -d -m 0755 /etc/systemd/system/caddy.service.d /etc/systemd/system/postgresql@.service.d
 install -m 0644 "$ROOT/deploy/systemd/caddy.service.d.conf" /etc/systemd/system/caddy.service.d/10-hardening.conf
 install -m 0644 "$ROOT/deploy/systemd/postgresql.service.d.conf" /etc/systemd/system/postgresql@.service.d/10-hardening.conf
 install -m 0644 "$ROOT/deploy/Caddyfile" /etc/caddy/Caddyfile
-install -m 0644 "$ROOT/deploy/cloudflared/config.yml" /etc/cloudflared/config.yml
 install -m 0644 "$ROOT/deploy/ssh/99-local-ai.conf" /etc/ssh/sshd_config.d/99-local-ai.conf
 install -d -m 0755 /etc/systemd/journald.conf.d
 install -m 0644 "$ROOT/deploy/journald/local-ai.conf" /etc/systemd/journald.conf.d/local-ai.conf
@@ -340,7 +346,7 @@ systemctl enable open-webui.service
 systemctl enable caddy.service
 systemctl enable local-ai-stack.target
 systemctl enable --now local-ai-retention.timer
-systemctl disable --now cloudflared.service || true
+systemctl enable --now local-ai-store-purge.timer
 if [[ -f /etc/wireguard/wg0.conf ]]; then
   systemctl enable wg-quick@wg0.service
 else
@@ -385,4 +391,4 @@ chmod 0644 "$baa_stamp"
 rm -f /etc/apt/sources.list.d/cloudflared.list
 install -m 0644 "$ROOT/deploy/apt/99local-ai-proxy" /etc/apt/apt.conf.d/99local-ai-proxy
 
-echo "install complete; native units are enabled and cloudflared is disabled"
+echo "install complete; native units are enabled"

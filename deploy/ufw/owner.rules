@@ -32,6 +32,5 @@
 -A ufw-before-output -m owner --uid-owner policy-gateway -j REJECT
 -A ufw-before-output -m owner --uid-owner postgres -j REJECT
 -A ufw-before-output -m owner --uid-owner caddy -j REJECT
--A ufw-before-output -m owner --uid-owner cloudflared -j REJECT
 -A ufw-before-output -m owner --uid-owner litellm -j REJECT
 -A ufw-before-output -m owner --uid-owner openwebui -j REJECT

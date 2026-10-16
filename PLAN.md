@@ -4,11 +4,11 @@ Task: `local-ai-dlp` · Red lane · Status: Ready. Cap allows this repo to be me
 
 ## 0. Decisions (Cap and Marko, 2026-10-16)
 
-- **Ingress.** Open WebUI and LiteLLM are **VPN/LAN only**. They are never placed on a Cloudflare Tunnel. Cap declined a Cloudflare BAA, so the earlier “CF BAA or VPN” choice is closed: PHI users do not cross Cloudflare. A tunnel file exists only as a sink (`http_status:404`) for a future non-PHI path and is disabled. No ingress rule may target Open WebUI, the policy gateway, or LiteLLM. Test 9 covers that UI leg.
+- **Ingress.** Open WebUI and LiteLLM are **VPN/LAN only**. They are never placed on a Cloudflare Tunnel. Cap declined a Cloudflare BAA, so the earlier “CF BAA or VPN” choice is closed: PHI users do not cross Cloudflare. cloudflared is not installed. No ingress rule may target Open WebUI, the policy gateway, or LiteLLM. Test 9 covers that UI leg.
 - **Enforcement.** A policy gateway in front of LiteLLM is the tested choke point. LiteLLM `v1.105.1` is pinned and still runs Presidio with `pii_entities_config` (that is what makes invalid analyzer responses fail closed in this version). Streaming is **off**. Untested routes are rejected.
 - **Anthropic.** Direct Claude API under Cap’s BAA. Cap confirms the BAA **includes zero data retention**. The runtime switch `ANTHROPIC_BAA_ENABLED` **defaults off** until the deploy checklist verifies that the configured API key and org are the ZDR org. Beta headers, server-side tools (web search, web fetch, code execution, computer use), Files, and Batches are rejected.
 - **Foundry.** Default is Azure OpenAI only (`azure/`), Microsoft-hosted, US regions (the allowlist includes `eastus2` and `westus3`), first-party `gpt-4.1` and `gpt-4o` families. Deployment names stay env placeholders. `azure_ai/` marketplace models are **disabled**; they may fall outside Microsoft’s BAA. Abuse-monitoring opt-out is **not assumed**; turn it on only with written approval that already exists.
-- **Native install (Cap, 2026-10-15).** No Docker. Open WebUI, LiteLLM, Presidio analyzer, Presidio anonymizer, and the policy gateway are each a hashed virtualenv under `/opt/<app>`, a non-login system user, and a systemd unit (`ProtectSystem=strict`, `NoNewPrivileges=yes`, `PrivateTmp=yes`, empty `CapabilityBoundingSet=`). Caddy binds `127.0.0.1` unless `VPN_BIND_IP` is set. cloudflared and WireGuard come from apt. The spaCy model is pinned at `en_core_web_lg==3.8.0`.
+- **Native install (Cap, 2026-10-15).** No Docker. Open WebUI, LiteLLM, Presidio analyzer, Presidio anonymizer, and the policy gateway are each a hashed virtualenv under `/opt/<app>`, a non-login system user, and a systemd unit (`ProtectSystem=strict`, `NoNewPrivileges=yes`, `PrivateTmp=yes`, empty `CapabilityBoundingSet=`). Caddy binds `127.0.0.1` unless `VPN_BIND_IP` is set. WireGuard comes from apt. cloudflared does not. The spaCy model is pinned at `en_core_web_lg==3.8.0`.
 - **Presidio package.** `presidio-analyzer==2.2.362` and `presidio-anonymizer==2.2.362` from PyPI, with hashes. That is the Microsoft release previously shipped as `mcr.microsoft.com/presidio-*:2.2.362`. Newer tags that exist only on `ghcr.io/data-privacy-stack` are not used. The HTTP servers are the 2.2.362 app modules, vendored so they bind loopback.
 - **Secrets and ports.** Root-only files under `/etc/<app>/` (mode 0600), loaded with systemd `LoadCredential`. Nothing listens on a wildcard address. Caddy is the only service that may leave loopback, and only onto `VPN_BIND_IP`. Postgres, Presidio, LiteLLM, and the gateway bind `127.0.0.1`.
 - **Open WebUI storage.** The data directory (chat history, uploads, search index) is ePHI on the LUKS volume. Uploads, web search, and external embeddings are off. Embeddings stay on the local sentence-transformers model. Chat retention is 30 days.
@@ -40,7 +40,7 @@ Cloudflare Tunnel is not in this path. Egress is default deny; the written list 
 - `presidio/recognizers/*.yaml` — MRN, RECORD_ID, ACCOUNT_ID, NPI, and the synthetic deny-list. `presidio/server/` is the vendored 2.2.362 HTTP app, bound to loopback.
 - `.env.example` — placeholders only, for the operator’s shell when running `install.sh`. systemd does not load it.
 - `docs/encrypted-volumes.md`, `docs/entra-sso.md`, `docs/host-hardening.md`, `docs/incident-response.md`, `docs/residual-risk.md`, `docs/deploy-checklist.md`, `docs/disposal-schedule.md`.
-- `deploy/systemd/`, `deploy/install.sh`, `ansible/`, `deploy/ufw/`, `deploy/cloudflared/`, `deploy/wireguard/`.
+- `deploy/systemd/`, `deploy/install.sh`, `ansible/`, `deploy/ufw/`, `deploy/wireguard/`.
 - `tests/` — synthetic fixtures and acceptance tests 1–11.
 
 ## 3. Phases
@@ -94,7 +94,7 @@ No deploy from this PR, no real credentials, no public exposure, no real data. C
 
 ## Target host
 
-Ubuntu Server LTS. `deploy/install.sh` is idempotent (`--check` in CI, `--apply` on the VM) and `ansible/site.yml` repeats those steps. Units are native systemd, not container orchestration. cloudflared is installed from apt and left disabled. WireGuard is installed from apt and is not started unless `/etc/wireguard/wg0.conf` already exists. Hardening, LUKS, UFW default-deny inbound and outbound, per-user egress, unattended-upgrades, and backups are documented in `docs/host-hardening.md` and `docs/encrypted-volumes.md`.
+Ubuntu Server LTS. `deploy/install.sh` is idempotent (`--check` in CI, `--apply` on the VM) and `ansible/site.yml` repeats those steps. Units are native systemd, not container orchestration. cloudflared is not installed. WireGuard is installed from apt and is not started unless `/etc/wireguard/wg0.conf` already exists. Hardening, LUKS, UFW default-deny inbound and outbound, per-user egress, unattended-upgrades, and backups are documented in `docs/host-hardening.md` and `docs/encrypted-volumes.md`.
 
 ## Audit review
 

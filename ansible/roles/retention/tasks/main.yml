@@ -7,6 +7,8 @@
   loop:
     - local-ai-retention.service
     - local-ai-retention.timer
+    - local-ai-store-purge.service
+    - local-ai-store-purge.timer
     - local-ai-stack.target
 
 - name: enable retention timer and the stack target
@@ -16,4 +18,5 @@
     daemon_reload: true
   loop:
     - local-ai-retention.timer
+    - local-ai-store-purge.timer
     - local-ai-stack.target
