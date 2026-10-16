@@ -701,7 +701,7 @@ def test_fixture_header_and_docs():
     checklist = (ROOT / "docs" / "deploy-checklist.md").read_text(encoding="utf-8")
     assert "ZDR" in checklist
     assert "abuse-monitoring" in checklist.lower()
-    assert "With the BAA off, a direct `:4000` call from a non-gateway uid is refused, and LiteLLM has no Anthropic key." in checklist
+    assert "A direct `:4000` call is refused for every uid whether the BAA is on or off. With the BAA off, LiteLLM has no Anthropic key." in checklist
 
 
 def test_recognizers_json_matches_yaml(recognizers):
