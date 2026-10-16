@@ -111,7 +111,7 @@ def test_azure_uses_api_key_and_gateway_is_uid_gated():
     assert owner.index(gate) < owner.index("-o lo -j ACCEPT")
     assert "# litellm -> login.microsoftonline.com" not in owner
     assert "--uid-owner litellm -j REJECT" in owner
-    timesync = (ROOT / "deploy" / "timesyncd" / "local-ai.conf").read_text(encoding="utf-8")
+    timesync = (ROOT / "deploy" / "systemd" / "timesyncd.conf.d" / "local-ai.conf").read_text(encoding="utf-8")
     assert "NTP=ntp.ubuntu.com" in timesync
     assert "time.cloudflare.com" not in (ROOT / "deploy" / "egress-destinations.yaml").read_text(encoding="utf-8")
     risk = (ROOT / "docs" / "residual-risk.md").read_text(encoding="utf-8")

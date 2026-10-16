@@ -61,6 +61,6 @@
 
 - name: timesyncd pool
   ansible.builtin.copy:
-    src: "{{ repo_root }}/deploy/timesyncd/local-ai.conf"
+    src: "{{ repo_root }}/deploy/systemd/timesyncd.conf.d/local-ai.conf"
     dest: /etc/systemd/timesyncd.conf.d/local-ai.conf
     mode: "0644"

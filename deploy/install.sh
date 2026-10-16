@@ -268,7 +268,7 @@ install -m 0644 "$ROOT/deploy/ssh/99-local-ai.conf" /etc/ssh/sshd_config.d/99-lo
 install -d -m 0755 /etc/systemd/journald.conf.d
 install -m 0644 "$ROOT/deploy/journald/local-ai.conf" /etc/systemd/journald.conf.d/local-ai.conf
 install -d -m 0755 /etc/systemd/timesyncd.conf.d
-install -m 0644 "$ROOT/deploy/timesyncd/local-ai.conf" /etc/systemd/timesyncd.conf.d/local-ai.conf
+install -m 0644 "$ROOT/deploy/systemd/timesyncd.conf.d/local-ai.conf" /etc/systemd/timesyncd.conf.d/local-ai.conf
 install -d -m 0755 /usr/share/local-ai-stack
 install -m 0644 "$ROOT/deploy/wireguard/wg0.conf.example" /usr/share/local-ai-stack/wg0.conf.example
 
