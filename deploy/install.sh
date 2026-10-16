@@ -29,6 +29,25 @@ if [[ "$(id -u)" -ne 0 ]]; then
   exit 1
 fi
 
+# Steady state does not keep the cloudflared apt origin. Drop a leftover list
+# before apt-get update so a re-apply does not dial pkg.cloudflare.com.
+rm -f /etc/apt/sources.list.d/cloudflared.list
+# Re-apply: the output filter is already loaded. Open install-only names on the
+# apt proxy, then let apt and pip use it. First apply has no proxy yet.
+if [[ -f /etc/apt/apt.conf.d/99local-ai-proxy ]] && systemctl is-active --quiet egress-proxy.service; then
+  install -d -m 0755 /etc/systemd/system/egress-proxy.service.d
+  printf '[Service]\nEnvironment=INSTALL_EGRESS=1\n' \
+    > /etc/systemd/system/egress-proxy.service.d/install-egress.conf
+  systemctl daemon-reload
+  systemctl restart egress-proxy.service
+  export http_proxy=http://127.0.0.1:8890
+  export https_proxy=http://127.0.0.1:8890
+  export HTTP_PROXY=http://127.0.0.1:8890
+  export HTTPS_PROXY=http://127.0.0.1:8890
+  export no_proxy=127.0.0.1,127.0.0.2,localhost
+  export NO_PROXY=127.0.0.1,127.0.0.2,localhost
+fi
+
 export DEBIAN_FRONTEND=noninteractive
 apt-get update
 apt-get install -y cryptsetup
@@ -72,6 +91,7 @@ create_user presidio-anonymizer /var/lib/local-ai-stack/presidio-anonymizer
 create_user litellm /var/lib/local-ai-stack/litellm
 create_user policy-gateway /var/lib/local-ai-stack/policy-gateway
 create_user openwebui /var/lib/local-ai-stack/webui
+create_user egress-proxy /var/lib/local-ai-stack/egress-proxy
 
 install -d -m 0755 \
   /opt/local-ai-stack \
@@ -122,6 +142,11 @@ install_config() {
 install_config "$ROOT/deploy/env/litellm.env" /etc/litellm/config.env
 install_config "$ROOT/deploy/env/policy-gateway.env" /etc/policy-gateway/config.env
 install_config "$ROOT/deploy/env/open-webui.env" /etc/open-webui/config.env
+microsoft_client_id="$(awk -F= '$1=="MICROSOFT_CLIENT_ID" { print $2 }' /etc/open-webui/config.env)"
+if [[ "$microsoft_client_id" == "00000000-0000-0000-0000-000000000000" ]]; then
+  echo "refusing zero-GUID MICROSOFT_CLIENT_ID" >&2
+  exit 1
+fi
 
 if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -q "Status: active"; then
   # Re-running apply on a locked host needs pip and the model hosts, then drops them.
@@ -161,7 +186,8 @@ if [[ "${ALLOW_EMBEDDING_DOWNLOAD:-1}" == "1" ]] && [[ ! -d /var/lib/local-ai-st
 fi
 
 bash "$ROOT/host/secrets/populate.sh"
-# Anthropic key and its egress rule exist only while the BAA switch is on.
+# One pass for the Anthropic key. Stop LiteLLM before the file changes so a
+# running process cannot keep LoadCredential bytes after the file is removed.
 baa_stamp=/var/lib/local-ai-stack/litellm/baa-switch
 baa_previous=false
 if [[ -f "$baa_stamp" ]]; then
@@ -170,11 +196,16 @@ fi
 baa_current=false
 if [[ "${ANTHROPIC_BAA_ENABLED:-false}" == "true" ]]; then
   baa_current=true
+fi
+if systemctl cat litellm.service >/dev/null 2>&1; then
+  systemctl stop litellm.service
+fi
+if [[ "$baa_current" == "true" ]]; then
   bash "$ROOT/deploy/write-secret.sh" /etc/litellm/anthropic_api_key ANTHROPIC_API_KEY
 else
   rm -f /etc/litellm/anthropic_api_key
 fi
-bash "$ROOT/deploy/write-secret.sh" /etc/cloudflared/credentials.json CLOUDFLARED_CREDENTIALS_JSON
+rm -f /etc/cloudflared/credentials.json
 
 bind_postgres_data() {
   local dest="/var/lib/local-ai-stack/postgres"
@@ -249,11 +280,10 @@ if [[ -n "${VPN_SSH_CIDR:-}" ]]; then
 fi
 
 if [[ -n "${AZURE_API_HOST:-}" ]]; then
-  if [[ ! "$AZURE_API_HOST" =~ ^[A-Za-z0-9.-]+\.openai\.azure\.com$ ]]; then
-    echo "AZURE_API_HOST must be a hostname ending in .openai.azure.com" >&2
+  if ! PYTHONPATH="$ROOT" python3 -c 'import os,sys; from stack.egress import azure_host_ok; sys.exit(0 if azure_host_ok(os.environ["AZURE_API_HOST"]) else 1)'; then
+    echo "AZURE_API_HOST must be one label, include a US region, and end in .openai.azure.com" >&2
     exit 1
   fi
-  # Resolved by host/ufw.sh into an owner-matched rule. systemd cannot allow a hostname.
   rm -f /etc/systemd/system/litellm.service.d/azure.conf
 fi
 
@@ -291,11 +321,20 @@ install -m 0755 "$ROOT/deploy/egress-refresh.sh" /usr/local/sbin/local-ai-egress
 sed "s|@LOCAL_AI_ROOT@|$ROOT|g" "$ROOT/deploy/systemd/local-ai-egress-refresh.service" \
   > /etc/systemd/system/local-ai-egress-refresh.service
 install -m 0644 "$ROOT/deploy/systemd/local-ai-egress-refresh.timer" /etc/systemd/system/local-ai-egress-refresh.timer
+sed "s|@LOCAL_AI_ROOT@|$ROOT|g" "$ROOT/deploy/systemd/local-ai-egress-nft.service" \
+  > /etc/systemd/system/local-ai-egress-nft.service
+rm -f /etc/systemd/system/egress-proxy.service.d/install-egress.conf
+install -d -m 0750 -o egress-proxy -g egress-proxy /var/lib/local-ai-stack/egress-proxy
+install -m 0755 "$ROOT/deploy/egress-proxy.py" /usr/local/sbin/local-ai-egress-proxy
+install -m 0644 "$ROOT/deploy/egress-destinations.yaml" /etc/local-ai-stack/egress-destinations.yaml
+install -m 0644 "$ROOT/deploy/systemd/egress-proxy.service" /etc/systemd/system/egress-proxy.service
+python3 "$ROOT/scripts/egress_nft.py" | nft -f -
 systemctl daemon-reload
 systemctl enable postgresql.service
 systemctl enable presidio-analyzer.service
 systemctl enable presidio-anonymizer.service
 systemctl enable litellm.service
+systemctl enable egress-proxy.service
 systemctl enable policy-gateway.service
 systemctl enable open-webui.service
 systemctl enable caddy.service
@@ -307,12 +346,18 @@ if [[ -f /etc/wireguard/wg0.conf ]]; then
 else
   systemctl disable wg-quick@wg0.service || true
 fi
+install -d -m 0755 /etc/systemd/timesyncd.conf.d
+install -m 0644 "$ROOT/deploy/systemd/timesyncd.conf.d/local-ai.conf" /etc/systemd/timesyncd.conf.d/local-ai.conf
 systemctl enable systemd-timesyncd
+systemctl try-restart systemd-timesyncd || true
 systemctl restart systemd-journald || true
 systemctl enable auditd || true
+rm -f /etc/systemd/system/network-pre.target.wants/local-ai-egress-nft.service
+systemctl enable local-ai-egress-nft.service
 systemctl enable --now local-ai-egress-refresh.timer
 
-systemctl restart litellm.service
+systemctl restart egress-proxy.service
+systemctl start litellm.service
 litellm_up=0
 for _ in $(seq 1 60); do
   if curl -fsS --max-time 2 http://127.0.0.2:4000/health/liveliness >/dev/null; then
@@ -337,5 +382,7 @@ unset SCOPE_VIRTUAL_KEY_FORCE
 install -d -m 0755 "$(dirname "$baa_stamp")"
 printf '%s\n' "$baa_current" > "$baa_stamp"
 chmod 0644 "$baa_stamp"
+rm -f /etc/apt/sources.list.d/cloudflared.list
+install -m 0644 "$ROOT/deploy/apt/99local-ai-proxy" /etc/apt/apt.conf.d/99local-ai-proxy
 
 echo "install complete; native units are enabled and cloudflared is disabled"

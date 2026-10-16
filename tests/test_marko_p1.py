@@ -7,6 +7,7 @@ import os
 import stat
 import subprocess
 import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -18,6 +19,43 @@ from stack.server import MAX_CONTENT_LENGTH, Handler, bind_address, checked_cont
 from scripts.scope_virtual_key import request_body
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def _sni_extension(names: list[str]) -> bytes:
+    entries = b""
+    for name in names:
+        encoded = name.encode("ascii")
+        entries += b"\x00" + len(encoded).to_bytes(2, "big") + encoded
+    body = len(entries).to_bytes(2, "big") + entries
+    return (0).to_bytes(2, "big") + len(body).to_bytes(2, "big") + body
+
+
+def _client_hello(
+    hostname: str | None,
+    *,
+    ech: bool = False,
+    extra_names: tuple[str, ...] = (),
+    duplicate: bool = False,
+) -> bytes:
+    """Synthetic TLS ClientHello. Not a live handshake."""
+    extensions = b""
+    names: list[str] = []
+    if hostname is not None:
+        names.append(hostname)
+    names.extend(extra_names)
+    if names:
+        extensions += _sni_extension(names)
+    if duplicate and hostname is not None:
+        extensions += _sni_extension([hostname])
+    if ech:
+        payload = b"\x00\x01"
+        extensions += (0xFE0D).to_bytes(2, "big") + len(payload).to_bytes(2, "big") + payload
+    body = b"\x03\x03" + (b"\x11" * 32) + b"\x00"
+    ciphers = b"\x13\x01"
+    body += len(ciphers).to_bytes(2, "big") + ciphers + b"\x01\x00"
+    body += len(extensions).to_bytes(2, "big") + extensions
+    handshake = b"\x01" + len(body).to_bytes(3, "big") + body
+    return b"\x16\x03\x01" + len(handshake).to_bytes(2, "big") + handshake
 
 
 def test_zdr_attestation_cites_cap_chat():
@@ -79,6 +117,11 @@ def test_open_webui_entra_group_and_no_first_admin():
     ssh = (ROOT / "host" / "ssh" / "00-local-ai-vpn.conf").read_text(encoding="utf-8")
     assert "AllowTcpForwarding local" in ssh
     assert "PermitOpen 127.0.0.2:4000" in ssh
+    assert "PermitTunnel no" in ssh
+    assert "AllowStreamLocalForwarding no" in ssh
+    other = (ROOT / "deploy" / "ssh" / "99-local-ai.conf").read_text(encoding="utf-8")
+    assert "PermitTunnel no" in other
+    assert "AllowStreamLocalForwarding no" in other
     assert "AllowTcpForwarding no" not in ssh
     assert "ssh -L 4000:127.0.0.2:4000" in doc
 
@@ -346,14 +389,21 @@ def test_anthropic_dropin_follows_the_switch(tmp_path):
     assert off.returncode == 0, off.stderr
     assert not (dest / "10-anthropic.conf").exists()
     install = (ROOT / "deploy" / "install.sh").read_text(encoding="utf-8")
+    stop = install.index("systemctl stop litellm.service")
+    delete = install.index("rm -f /etc/litellm/anthropic_api_key")
     dropin = install.index("litellm-baa-dropin.sh")
-    reload = install.index("systemctl daemon-reload")
-    restart = install.index("systemctl restart litellm.service")
+    # The earlier daemon-reload only restarts the proxy for a re-apply.
+    assert install.index("systemctl daemon-reload") < stop
+    reload = install.rindex("systemctl daemon-reload")
+    start = install.index("systemctl start litellm.service")
     health = install.index("http://127.0.0.2:4000/health/liveliness")
     scope = install.index("scope_virtual_key.py")
-    assert dropin < reload < restart < health < scope
+    assert stop < delete < dropin < reload < start < health < scope
+    assert "systemctl restart litellm.service" not in install
     assert '[[ "$baa_previous" != "$baa_current" ]]' in install
     assert install.index("SCOPE_VIRTUAL_KEY_FORCE=1") < scope
+    assert "write-secret.sh\" /etc/cloudflared/credentials.json" not in install
+    assert "rm -f /etc/cloudflared/credentials.json" in install
 
 
 def test_reject_is_spliced_before_loopback_accept():
@@ -384,7 +434,21 @@ def test_user_groups_header_stays_comma_separated():
     timer = (ROOT / "deploy" / "systemd" / "local-ai-egress-refresh.timer").read_text(encoding="utf-8")
     assert "OnUnitActiveSec=5min" in timer
     design = (ROOT / "docs" / "egress-proxy.md").read_text(encoding="utf-8")
-    assert "deploy blocker" in design.lower() or "Deploy blocker" in design or "still a deploy blocker" in design
+    assert "127.0.0.1:8888" in design
+    assert "127.0.0.1:8889" in design
+    assert "127.0.0.1:8890" in design
+    assert "127.0.0.1:8891" in design
+    assert "Verify on the VM" in design
+    assert "Reboot" in design
+    assert "udp sport 68 udp dport 67 accept" in design
+    assert "nd-neighbor-solicit" in design
+    assert "nobody" in design
+    assert "ntp.ubuntu.com" in design
+    assert "root blocked" in design
+    assert "Host: evil.example" in design
+    assert "Wants=network-pre.target" in (ROOT / "deploy" / "systemd" / "local-ai-egress-nft.service").read_text(encoding="utf-8")
+    assert "WantedBy=sysinit.target" in (ROOT / "deploy" / "systemd" / "local-ai-egress-nft.service").read_text(encoding="utf-8")
+    assert "WantedBy=multi-user.target" in (ROOT / "deploy" / "systemd" / "local-ai-egress-nft.service").read_text(encoding="utf-8")
 
 
 def test_litellm_port_4000_is_gated():
@@ -459,6 +523,32 @@ def test_nft_rejects_litellm_before_loopback_accept():
     loopback = rules.index('oifname "lo" accept')
     assert rules.index("ip daddr 127.0.0.2 tcp dport 4000 reject") < loopback
     assert rules.index("ip daddr 127.0.0.1 tcp dport 4000 reject") < loopback
+    assert rules.index("tcp dport 8888 meta skuid != openwebui reject") < loopback
+    assert rules.index("tcp dport 8889 meta skuid != litellm reject") < loopback
+    assert "meta skuid egress-proxy tcp dport { 80, 443 } accept" in rules
+    assert "meta skuid systemd-resolve meta l4proto { tcp, udp } th dport 53 accept" in rules
+    assert "meta skuid systemd-timesync udp dport 123 accept" in rules
+    assert "udp sport 68 udp dport 67 accept" in rules
+    assert "udp sport 546 udp dport 547 accept" in rules
+    assert "nd-neighbor-solicit" in rules
+    assert rules.index("tcp dport 8890 meta skuid root accept") < loopback
+    assert rules.index("tcp dport 8890 meta skuid _apt accept") < loopback
+    assert rules.index("tcp dport 8890 reject") < loopback
+    assert rules.index("tcp dport 8891 meta skuid != policy-gateway reject") < loopback
+    assert "meta skuid _apt tcp dport { 80, 443 } accept" not in rules
+    assert "meta skuid root tcp dport { 80, 443 } accept" not in rules
+    assert "meta skuid policy-gateway tcp dport 443 accept" not in rules
+    mcp = render_nft({"STACKJACK_MCP_HOST": "mcp.example"})
+    assert "meta skuid policy-gateway tcp dport 443 accept" not in mcp
+    siem = render_nft({"SIEM_HOST": "siem.example", "SIEM_PORT": "6514"})
+    assert "meta skuid root tcp dport 6514 accept" in siem
+    for user in ("egress-proxy", "openwebui", "litellm", "systemd-resolve", "systemd-timesync", "policy-gateway", "_apt"):
+        subprocess.run(
+            ["sudo", "useradd", "--system", "--shell", "/usr/sbin/nologin", user],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
     checked = subprocess.run(
         ["sudo", "nft", "-c", "-f", "-"],
         input=rules,
@@ -607,6 +697,506 @@ def test_gateway_strips_forwarded_name_and_email(monkeypatch):
     assert "x-openwebui-user-name" not in recorded
     assert "x-openwebui-user-email" not in recorded
     assert recorded.get("x-litellm-team-id") == "phi"
+
+
+def test_proxy_allowlist_is_per_service():
+    import socket
+
+    from stack.egress import (
+        APT_DESTINATIONS,
+        MCP_DESTINATIONS,
+        azure_host_ok,
+        host_on_named_destination,
+        load_destinations,
+        proxy_host_allowed,
+    )
+    from stack.egress_proxy import (
+        PROXY_LISTENERS,
+        RUNTIME_LISTENERS,
+        EgressProxy,
+        SniError,
+        bind_address,
+        client_hello_sni,
+        connect_allowed,
+        forbidden_ip,
+    )
+
+    raw = load_destinations(ROOT / "deploy" / "egress-destinations.yaml")
+    env = {
+        "ANTHROPIC_BAA_ENABLED": "true",
+        "AZURE_API_HOST": "cap-eastus2.openai.azure.com",
+        "INSTALL_EGRESS": "1",
+        "STACKJACK_MCP_HOST": "mcp.example",
+    }
+    assert connect_allowed("login.microsoftonline.com", 443, raw, env, "openwebui")
+    assert not connect_allowed("api.anthropic.com", 443, raw, env, "openwebui")
+    assert not connect_allowed("cap-eastus2.openai.azure.com", 443, raw, env, "openwebui")
+    assert connect_allowed("api.anthropic.com", 443, raw, env, "litellm")
+    assert connect_allowed("cap-eastus2.openai.azure.com", 443, raw, env, "litellm")
+    assert not connect_allowed("login.microsoftonline.com", 443, raw, env, "litellm")
+    assert not connect_allowed("api.anthropic.com", 80, raw, env, "litellm")
+    for blocked in ("pypi.org", "dl.cloudsmith.io", "pkg.cloudflare.com", "archive.ubuntu.com"):
+        assert not proxy_host_allowed(blocked, "litellm", raw, env)
+        assert not proxy_host_allowed(blocked, "openwebui", raw, env)
+        assert not proxy_host_allowed(blocked, "presidio-analyzer", raw, env)
+    assert not proxy_host_allowed("mcp.example", "policy-gateway", raw, {"STACKJACK_MCP_HOST": "mcp.example"})
+    assert "presidio-analyzer" not in {user for user, _port in RUNTIME_LISTENERS}
+    assert azure_host_ok("cap-eastus2.openai.azure.com")
+    assert not azure_host_ok("not-a-region.openai.azure.com")
+    assert not azure_host_ok("a.b.openai.azure.com")
+    assert not azure_host_ok("foo..eastus2.openai.azure.com")
+    assert not azure_host_ok("lab-westeurope.openai.azure.com")
+    assert host_on_named_destination("archive.ubuntu.com", 80, raw, env, APT_DESTINATIONS)
+    assert host_on_named_destination("dl.cloudsmith.io", 443, raw, env, APT_DESTINATIONS)
+    assert not host_on_named_destination("dl.cloudsmith.io", 80, raw, env, APT_DESTINATIONS)
+    assert not host_on_named_destination("pkg.cloudflare.com", 443, raw, env, APT_DESTINATIONS)
+    assert host_on_named_destination("pypi.org", 443, raw, {"INSTALL_EGRESS": "1"}, APT_DESTINATIONS)
+    assert not host_on_named_destination("pypi.org", 443, raw, {}, APT_DESTINATIONS)
+    assert host_on_named_destination("mcp.example", 443, raw, env, MCP_DESTINATIONS)
+    assert not host_on_named_destination("archive.ubuntu.com", 443, raw, env, MCP_DESTINATIONS)
+    assert "is_global" in (ROOT / "stack" / "egress_proxy.py").read_text(encoding="utf-8")
+    assert forbidden_ip("127.0.0.1")
+    assert forbidden_ip("10.1.2.3")
+    assert forbidden_ip("192.168.1.1")
+    assert forbidden_ip("100.64.0.1")
+    assert forbidden_ip("::ffff:100.64.0.1")
+    assert forbidden_ip("169.254.1.1")
+    assert forbidden_ip("fd00::1")
+    assert forbidden_ip("203.0.113.10")
+    assert forbidden_ip("2001:db8::1")
+    assert forbidden_ip("224.0.0.1")
+    assert not forbidden_ip("8.8.8.8")
+    with pytest.raises(SystemExit):
+        bind_address("0.0.0.0")
+    with pytest.raises(SystemExit):
+        bind_address("::")
+    assert bind_address("127.0.0.1") == "127.0.0.1"
+    dialed: list[tuple[str, int]] = []
+    forwarded: list[bytes] = []
+    upstream_http: list[bytes] = []
+
+    def connect(host: str, port: int):
+        dialed.append((host, port))
+        left, right = socket.socketpair()
+        if port == 80:
+            def reply() -> None:
+                data = b""
+                while b"\r\n\r\n" not in data and len(data) < 8192:
+                    chunk = right.recv(4096)
+                    if not chunk:
+                        break
+                    data += chunk
+                upstream_http.append(data)
+                right.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+                right.close()
+
+            threading.Thread(target=reply, daemon=True).start()
+            return left
+
+        def grab() -> None:
+            try:
+                forwarded.append(right.recv(8192))
+            except OSError:
+                forwarded.append(b"")
+            right.close()
+
+        threading.Thread(target=grab, daemon=True).start()
+        return left
+
+    def resolve(host: str) -> list[str]:
+        if host == "api.anthropic.com":
+            return ["10.1.2.3", "192.168.0.5", "100.64.0.8", "fd00::2"]
+        return ["8.8.8.8", "127.0.0.1"]
+
+    proxy = EgressProxy(raw, env, connect=connect, resolve=resolve)
+    assert all(sock.getsockname()[0] == "127.0.0.1" for _user, sock in proxy.sockets)
+    thread = threading.Thread(target=proxy.serve_forever, daemon=True)
+    thread.start()
+
+    def request(user: str, payload: bytes) -> bytes:
+        sock = socket.create_connection(("127.0.0.1", proxy.port_for(user)), timeout=2)
+        sock.settimeout(2)
+        sock.sendall(payload)
+        data = b""
+        while b"\r\n" not in data:
+            chunk = sock.recv(256)
+            if not chunk:
+                break
+            data += chunk
+        sock.close()
+        return data
+
+    try:
+        entra = request("openwebui", b"CONNECT login.microsoftonline.com:443 HTTP/1.1\r\nHost: login.microsoftonline.com:443\r\n\r\n")
+        assert entra.startswith(b"HTTP/1.1 200")
+        denied = request("openwebui", b"CONNECT api.anthropic.com:443 HTTP/1.1\r\nHost: api.anthropic.com:443\r\n\r\n")
+        assert denied.startswith(b"HTTP/1.1 403")
+        azure_denied = request(
+            "openwebui",
+            b"CONNECT cap-eastus2.openai.azure.com:443 HTTP/1.1\r\nHost: cap-eastus2.openai.azure.com:443\r\n\r\n",
+        )
+        assert azure_denied.startswith(b"HTTP/1.1 403")
+        private = request("litellm", b"CONNECT api.anthropic.com:443 HTTP/1.1\r\nHost: api.anthropic.com:443\r\n\r\n")
+        assert private.startswith(b"HTTP/1.1 403")
+        azure = request(
+            "litellm",
+            b"CONNECT cap-eastus2.openai.azure.com:443 HTTP/1.1\r\nHost: cap-eastus2.openai.azure.com:443\r\n\r\n",
+        )
+        assert azure.startswith(b"HTTP/1.1 200")
+        wrong_port = request("litellm", b"CONNECT cap-eastus2.openai.azure.com:80 HTTP/1.1\r\nHost: cap-eastus2.openai.azure.com:80\r\n\r\n")
+        assert wrong_port.startswith(b"HTTP/1.1 403")
+        get = request("litellm", b"GET http://cap-eastus2.openai.azure.com/ HTTP/1.1\r\nHost: cap-eastus2.openai.azure.com\r\n\r\n")
+        assert get.startswith(b"HTTP/1.1 405")
+        apt = request("apt", b"CONNECT archive.ubuntu.com:443 HTTP/1.1\r\nHost: archive.ubuntu.com:443\r\n\r\n")
+        assert apt.startswith(b"HTTP/1.1 200")
+        apt_host = request("apt", b"CONNECT archive.ubuntu.com:443 HTTP/1.1\r\nHost: evil.example:443\r\n\r\n")
+        assert apt_host.startswith(b"HTTP/1.1 403")
+        cloud = request("apt", b"CONNECT pkg.cloudflare.com:443 HTTP/1.1\r\nHost: pkg.cloudflare.com:443\r\n\r\n")
+        assert cloud.startswith(b"HTTP/1.1 403")
+        http_ok = request(
+            "apt",
+            b"GET http://archive.ubuntu.com/ubuntu/ HTTP/1.1\r\nHost: archive.ubuntu.com\r\nConnection: keep-alive\r\n\r\n",
+        )
+        assert http_ok.startswith(b"HTTP/1.1 200")
+        http_bad = request(
+            "apt",
+            b"GET http://archive.ubuntu.com/ubuntu/ HTTP/1.1\r\nHost: evil.example\r\n\r\n",
+        )
+        assert http_bad.startswith(b"HTTP/1.1 403")
+        duplicate_host = request(
+            "apt",
+            b"GET http://archive.ubuntu.com/ubuntu/ HTTP/1.1\r\nHost: archive.ubuntu.com\r\nHost: archive.ubuntu.com\r\n\r\n",
+        )
+        assert duplicate_host.startswith(b"HTTP/1.1 400")
+        duplicate_te = request(
+            "apt",
+            b"GET http://archive.ubuntu.com/ubuntu/ HTTP/1.1\r\nHost: archive.ubuntu.com\r\nTransfer-Encoding: chunked\r\nTransfer-Encoding: identity\r\n\r\n",
+        )
+        assert duplicate_te.startswith(b"HTTP/1.1 400")
+        mcp = request("policy-gateway", b"CONNECT mcp.example:443 HTTP/1.1\r\nHost: mcp.example:443\r\n\r\n")
+        assert mcp.startswith(b"HTTP/1.1 200")
+        mcp_bad = request(
+            "policy-gateway",
+            b"CONNECT archive.ubuntu.com:443 HTTP/1.1\r\nHost: archive.ubuntu.com:443\r\n\r\n",
+        )
+        assert mcp_bad.startswith(b"HTTP/1.1 403")
+        hello = _client_hello("login.microsoftonline.com")
+        assert client_hello_sni(hello) == "login.microsoftonline.com"
+        with pytest.raises(SniError) as missing:
+            client_hello_sni(_client_hello(None))
+        assert missing.value.reason == "missing"
+        with pytest.raises(SniError) as ech:
+            client_hello_sni(_client_hello("login.microsoftonline.com", ech=True))
+        assert ech.value.reason == "ech"
+        sock = socket.create_connection(("127.0.0.1", proxy.port_for("openwebui")), timeout=2)
+        sock.settimeout(2)
+        sock.sendall(b"CONNECT login.microsoftonline.com:443 HTTP/1.1\r\nHost: login.microsoftonline.com:443\r\n\r\n")
+        established = b""
+        while b"\r\n\r\n" not in established:
+            established += sock.recv(256)
+        assert established.startswith(b"HTTP/1.1 200")
+        dials_before = len(dialed)
+        sock.sendall(hello)
+        deadline = time.time() + 2
+        while len(forwarded) < 1 and time.time() < deadline:
+            time.sleep(0.01)
+        sock.close()
+        assert forwarded == [hello]
+        assert len(dialed) == dials_before + 1
+        mismatch = socket.create_connection(("127.0.0.1", proxy.port_for("apt")), timeout=2)
+        mismatch.settimeout(2)
+        mismatch.sendall(b"CONNECT archive.ubuntu.com:443 HTTP/1.1\r\nHost: archive.ubuntu.com:443\r\n\r\n")
+        opened = b""
+        while b"\r\n\r\n" not in opened:
+            opened += mismatch.recv(256)
+        assert opened.startswith(b"HTTP/1.1 200")
+        dials_before = len(dialed)
+        mismatch.sendall(_client_hello("evil.example"))
+        assert mismatch.recv(16) == b""
+        mismatch.close()
+        assert len(dialed) == dials_before
+    finally:
+        proxy.close()
+    assert upstream_http and b"\r\nConnection: close\r\n" in upstream_http[0]
+    assert b"keep-alive" not in upstream_http[0].lower()
+    assert ("8.8.8.8", 443) in dialed
+    assert ("8.8.8.8", 80) in dialed
+    assert ("10.1.2.3", 443) not in dialed
+    assert ("127.0.0.1", 443) not in dialed
+    litellm = (ROOT / "deploy" / "systemd" / "litellm.service").read_text(encoding="utf-8")
+    webui = (ROOT / "deploy" / "systemd" / "open-webui.service").read_text(encoding="utf-8")
+    analyzer = (ROOT / "deploy" / "systemd" / "presidio-analyzer.service").read_text(encoding="utf-8")
+    assert "HTTPS_PROXY=http://127.0.0.1:8889" in litellm
+    assert "HTTPS_PROXY=http://127.0.0.1:8888" in webui
+    assert "HTTPS_PROXY=" not in analyzer
+    gateway = (ROOT / "deploy" / "systemd" / "policy-gateway.service").read_text(encoding="utf-8")
+    assert "HTTPS_PROXY=http://127.0.0.1:8891" in gateway
+    assert "NO_PROXY=127.0.0.1,127.0.0.2,localhost" in gateway
+    assert {user for user, _port in PROXY_LISTENERS} >= {"openwebui", "litellm", "apt", "policy-gateway"}
+    install = (ROOT / "deploy" / "install.sh").read_text(encoding="utf-8")
+    assert install.index("99local-ai-proxy") < install.index("\napt-get update")
+    assert install.rindex("systemctl restart egress-proxy.service") < install.rindex("99local-ai-proxy")
+    assert "NTP=ntp.ubuntu.com" in (ROOT / "deploy" / "systemd" / "timesyncd.conf.d" / "local-ai.conf").read_text(encoding="utf-8")
+    assert "0.pool.ntp.org" not in (ROOT / "deploy" / "egress-destinations.yaml").read_text(encoding="utf-8")
+    assert "time.cloudflare.com" not in (ROOT / "deploy" / "egress-destinations.yaml").read_text(encoding="utf-8")
+    nft_unit = (ROOT / "deploy" / "systemd" / "local-ai-egress-nft.service").read_text(encoding="utf-8")
+    assert "Before=network-pre.target" in nft_unit
+    assert "Wants=network-pre.target" in nft_unit
+    assert "WantedBy=sysinit.target" in nft_unit
+    assert "WantedBy=multi-user.target" in nft_unit
+    assert "network-pre.target.wants/local-ai-egress-nft.service" in install
+    assert "--nft-only" in (ROOT / "deploy" / "egress-refresh.sh").read_text(encoding="utf-8")
+
+
+def test_sni_refusals_deadline_cap_and_port80():
+    import socket
+
+    from stack.egress import load_destinations
+    from stack.egress_proxy import (
+        CONNECTION_CAP,
+        HANDSHAKE_DEADLINE,
+        EgressProxy,
+        SniError,
+        _read_tls_record,
+        client_hello_sni,
+        require_client_hello,
+    )
+
+    assert HANDSHAKE_DEADLINE == 10
+    assert CONNECTION_CAP == 64
+    design = (ROOT / "docs" / "egress-proxy.md").read_text(encoding="utf-8")
+    assert "duplicate SNI extension" in design
+    assert "10 seconds" in design
+    assert "64" in design
+    assert "Any Transfer-Encoding" in design
+    assert "duplicate Content-Length" in design
+    assert "obs-fold" in design
+    with pytest.raises(SniError) as mismatch:
+        require_client_hello(_client_hello("evil.example"), "archive.ubuntu.com")
+    assert mismatch.value.reason == "mismatch"
+    assert require_client_hello(_client_hello("Archive.Ubuntu.com."), "archive.ubuntu.com") == "archive.ubuntu.com"
+    with pytest.raises(SniError) as multi:
+        client_hello_sni(_client_hello("archive.ubuntu.com", extra_names=("evil.example",)))
+    assert multi.value.reason == "malformed"
+    with pytest.raises(SniError) as duplicate:
+        client_hello_sni(_client_hello("archive.ubuntu.com", duplicate=True))
+    assert duplicate.value.reason == "duplicate"
+    with pytest.raises(SniError) as nontls:
+        client_hello_sni(b"\x17\x03\x03\x00\x01\xff")
+    assert nontls.value.reason == "malformed"
+    oversize = b"\x16\x03\x01" + (16385).to_bytes(2, "big") + (b"\x00" * 16385)
+    with pytest.raises(SniError) as huge:
+        client_hello_sni(oversize)
+    assert huge.value.reason == "malformed"
+
+    left, right = socket.socketpair()
+    right.sendall(b"\x16\x03\x01\x00\x20")
+    right.close()
+    with pytest.raises(SniError) as truncated:
+        _read_tls_record(left, time.monotonic() + 1)
+    assert truncated.value.reason == "missing"
+    left.close()
+
+    left, right = socket.socketpair()
+    right.sendall(b"\x16\x03\x01" + (16385).to_bytes(2, "big"))
+    right.close()
+    with pytest.raises(SniError) as declared:
+        _read_tls_record(left, time.monotonic() + 1)
+    assert declared.value.reason == "malformed"
+    left.close()
+
+    left, right = socket.socketpair()
+    right.sendall(b"\x17\x03\x03\x00\x01\xff")
+    with pytest.raises(SniError) as application_data:
+        _read_tls_record(left, time.monotonic() + 1)
+    assert application_data.value.reason == "malformed"
+    left.close()
+    right.close()
+
+    raw = load_destinations(ROOT / "deploy" / "egress-destinations.yaml")
+    env = {"INSTALL_EGRESS": "1"}
+    dialed: list[tuple[str, int]] = []
+
+    def connect(host: str, port: int):
+        dialed.append((host, port))
+        one, two = socket.socketpair()
+        if port == 80:
+            def reply() -> None:
+                try:
+                    two.recv(8192)
+                    two.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+                except OSError:
+                    pass
+                two.close()
+
+            threading.Thread(target=reply, daemon=True).start()
+            return one
+        two.close()
+        return one
+
+    def resolve(_host: str) -> list[str]:
+        return ["8.8.8.8"]
+
+    proxy = EgressProxy(
+        raw,
+        env,
+        listeners=(("openwebui", 0), ("apt", 0)),
+        connect=connect,
+        resolve=resolve,
+        handshake_deadline=2,
+    )
+    threading.Thread(target=proxy.serve_forever, daemon=True).start()
+
+    def opened(user: str, host: str) -> socket.socket:
+        sock = socket.create_connection(("127.0.0.1", proxy.port_for(user)), timeout=2)
+        sock.settimeout(2)
+        sock.sendall(f"CONNECT {host}:443 HTTP/1.1\r\nHost: {host}:443\r\n\r\n".encode())
+        data = b""
+        while b"\r\n\r\n" not in data:
+            data += sock.recv(256)
+        assert data.startswith(b"HTTP/1.1 200")
+        return sock
+
+    def refused(user: str, host: str, payload: bytes, *, shutdown: bool = False, timeout: float = 2) -> None:
+        before = len(dialed)
+        sock = opened(user, host)
+        sock.settimeout(timeout)
+        sock.sendall(payload)
+        if shutdown:
+            sock.shutdown(socket.SHUT_WR)
+        try:
+            assert sock.recv(16) == b""
+        except ConnectionResetError:
+            pass
+        sock.close()
+        assert len(dialed) == before
+
+    def http(payload: bytes) -> bytes:
+        sock = socket.create_connection(("127.0.0.1", proxy.port_for("apt")), timeout=2)
+        sock.settimeout(2)
+        sock.sendall(payload)
+        data = b""
+        while b"\r\n" not in data:
+            chunk = sock.recv(256)
+            if not chunk:
+                break
+            data += chunk
+        sock.close()
+        return data
+
+    try:
+        refused("openwebui", "login.microsoftonline.com", _client_hello("evil.example"))
+        refused(
+            "openwebui",
+            "login.microsoftonline.com",
+            _client_hello("login.microsoftonline.com", extra_names=("evil.example",)),
+        )
+        refused("openwebui", "login.microsoftonline.com", _client_hello("login.microsoftonline.com", duplicate=True))
+        refused("openwebui", "login.microsoftonline.com", b"\x16\x03\x01\x00\x20", shutdown=True)
+        refused("openwebui", "login.microsoftonline.com", b"\x16\x03\x01" + (16385).to_bytes(2, "big"), timeout=0.3)
+        refused("openwebui", "login.microsoftonline.com", b"\x17\x03\x03\x00\x01\xff")
+        assert http(
+            b"GET http://archive.ubuntu.com/ubuntu/ HTTP/1.1\r\nHost: archive.ubuntu.com\r\nTransfer-Encoding: chunked\r\n\r\n"
+        ).startswith(b"HTTP/1.1 400")
+        assert http(
+            b"GET http://archive.ubuntu.com/ubuntu/ HTTP/1.1\r\nHost: archive.ubuntu.com\r\nContent-Length: 0\r\nContent-Length: 0\r\n\r\n"
+        ).startswith(b"HTTP/1.1 400")
+        assert http(
+            b"GET http://archive.ubuntu.com/ubuntu/ HTTP/1.1\r\n Host: archive.ubuntu.com\r\n\r\n"
+        ).startswith(b"HTTP/1.1 400")
+        assert http(
+            b"GET http://archive.ubuntu.com/ubuntu/ HTTP/1.1\r\nHost: archive.ubuntu.com\r\nContent-Length: 0\r\n\r\n"
+        ).startswith(b"HTTP/1.1 200")
+    finally:
+        proxy.close()
+
+    quiet = EgressProxy(
+        raw,
+        env,
+        listeners=(("openwebui", 0),),
+        connect=connect,
+        resolve=resolve,
+        handshake_deadline=0.05,
+    )
+    threading.Thread(target=quiet.serve_forever, daemon=True).start()
+    try:
+        stalled = socket.create_connection(("127.0.0.1", quiet.port_for("openwebui")), timeout=2)
+        stalled.settimeout(1)
+        assert stalled.recv(64).startswith(b"HTTP/1.1 408")
+        stalled.close()
+        before = len(dialed)
+        tunnel = socket.create_connection(("127.0.0.1", quiet.port_for("openwebui")), timeout=2)
+        tunnel.settimeout(1)
+        tunnel.sendall(b"CONNECT login.microsoftonline.com:443 HTTP/1.1\r\nHost: login.microsoftonline.com:443\r\n\r\n")
+        established = b""
+        while b"\r\n\r\n" not in established:
+            established += tunnel.recv(256)
+        assert established.startswith(b"HTTP/1.1 200")
+        assert tunnel.recv(16) == b""
+        tunnel.close()
+        assert len(dialed) == before
+    finally:
+        quiet.close()
+
+    gate = threading.Event()
+    started = threading.Event()
+
+    def blocking_connect(host: str, port: int):
+        dialed.append((host, port))
+        started.set()
+        assert gate.wait(timeout=3)
+        one, two = socket.socketpair()
+        two.close()
+        return one
+
+    capped = EgressProxy(
+        raw,
+        env,
+        listeners=(("openwebui", 0),),
+        connect=blocking_connect,
+        resolve=resolve,
+        connection_cap=1,
+        handshake_deadline=5,
+    )
+    threading.Thread(target=capped.serve_forever, daemon=True).start()
+    try:
+        first = socket.create_connection(("127.0.0.1", capped.port_for("openwebui")), timeout=2)
+        first.settimeout(2)
+        first.sendall(b"CONNECT login.microsoftonline.com:443 HTTP/1.1\r\nHost: login.microsoftonline.com:443\r\n\r\n")
+        established = b""
+        while b"\r\n\r\n" not in established:
+            established += first.recv(256)
+        assert established.startswith(b"HTTP/1.1 200")
+        first.sendall(_client_hello("login.microsoftonline.com"))
+        assert started.wait(timeout=2)
+        second = socket.create_connection(("127.0.0.1", capped.port_for("openwebui")), timeout=2)
+        second.settimeout(1)
+        try:
+            closed = second.recv(32)
+        except ConnectionResetError:
+            closed = b""
+        assert closed == b""
+        second.close()
+        gate.set()
+        first.close()
+    finally:
+        gate.set()
+        capped.close()
+
+
+def test_open_webui_refuses_zero_client_id():
+    env = os.environ.copy()
+    env["MICROSOFT_CLIENT_ID"] = "00000000-0000-0000-0000-000000000000"
+    proc = subprocess.run(
+        ["bash", str(ROOT / "deploy" / "open-webui-run.sh")],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert proc.returncode == 1
+    assert "refusing zero-GUID MICROSOFT_CLIENT_ID" in proc.stderr
+    assert "refusing zero-GUID MICROSOFT_CLIENT_ID" in (ROOT / "deploy" / "install.sh").read_text(encoding="utf-8")
 
 
 def test_least_privilege_is_not_claimed_tested_here():

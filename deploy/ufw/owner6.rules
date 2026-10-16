@@ -1,0 +1,6 @@
+# DHCPv6 renew and IPv6 neighbor discovery. Spliced into before6.rules.
+-A ufw6-before-output -p udp --sport 546 --dport 547 -j ACCEPT
+-A ufw6-before-output -p ipv6-icmp --icmpv6-type router-solicitation -j ACCEPT
+-A ufw6-before-output -p ipv6-icmp --icmpv6-type router-advertisement -j ACCEPT
+-A ufw6-before-output -p ipv6-icmp --icmpv6-type neighbour-solicitation -j ACCEPT
+-A ufw6-before-output -p ipv6-icmp --icmpv6-type neighbour-advertisement -j ACCEPT

@@ -15,6 +15,11 @@ Environment=HOME=/var/lib/local-ai-stack/webui
 Environment=HF_HOME=/var/lib/local-ai-stack/webui/hf
 Environment=SENTENCE_TRANSFORMERS_HOME=/var/lib/local-ai-stack/webui/st
 Environment=DATA_DIR=/var/lib/local-ai-stack/webui
+Environment=http_proxy=http://127.0.0.1:8888
+Environment=https_proxy=http://127.0.0.1:8888
+Environment=HTTP_PROXY=http://127.0.0.1:8888
+Environment=HTTPS_PROXY=http://127.0.0.1:8888
+Environment=NO_PROXY=127.0.0.1,127.0.0.2,localhost
 LoadCredential=webui_secret_key:/etc/open-webui/webui_secret_key
 LoadCredential=webui_admin_password:/etc/open-webui/webui_admin_password
 LoadCredential=microsoft_client_secret:/etc/open-webui/microsoft_client_secret
@@ -36,8 +41,7 @@ RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 CapabilityBoundingSet=
 UMask=0077
 ReadWritePaths=/var/lib/local-ai-stack/webui
-# Deny the LiteLLM address. Entra egress is a UFW owner rule with resolved IPs,
-# because systemd ignores hostnames in IPAddressAllow.
+# Deny the LiteLLM address. Entra login leaves through the local egress proxy.
 IPAddressDeny=127.0.0.2
 
 [Install]
