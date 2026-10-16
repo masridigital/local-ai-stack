@@ -1,6 +1,6 @@
 # Encrypted volumes
 
-The VM disk is LUKS at install, or a LUKS volume is mounted at `/var/lib/local-ai-stack` before the units start. `deploy/install.sh` bind-mounts `/var/lib/local-ai-stack/postgres` onto `/var/lib/postgresql` so the apt Postgres cluster is on that volume. Keys and passphrases are escrowed outside this host (vault or sealed envelope), not next to the backup set.
+The VM disk is LUKS at install, or a LUKS volume is mounted at `/var/lib/local-ai-stack` before the units start. `deploy/install.sh --apply` verifies that path with `scripts/check_luks.py --target` and refuses to continue when the walker finds no `crypt` ancestor. `deploy/install.sh` bind-mounts `/var/lib/local-ai-stack/postgres` onto `/var/lib/postgresql` so the apt Postgres cluster is on that volume. Keys and passphrases are escrowed outside this host (vault or sealed envelope), not next to the backup set.
 
 | Path | Contents | Class |
 |---|---|---|

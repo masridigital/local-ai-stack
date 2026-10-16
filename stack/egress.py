@@ -14,16 +14,29 @@ def load_destinations(path: Path) -> dict:
     return raw
 
 
+def destination_active(item: dict, env: dict[str, str]) -> bool:
+    """A row is live only when its flag, optional host, and install-time gate say so."""
+    if item.get("enabled", True) is False:
+        return False
+    if item.get("install_only") and env.get("INSTALL_EGRESS", "") != "1":
+        return False
+    if item.get("optional") and item.get("env"):
+        value = env.get(item["env"], "")
+        expected = item.get("env_value")
+        if expected is not None:
+            return value == expected
+        return bool(value)
+    return True
+
+
 def allowed_hosts(raw: dict, env: dict[str, str]) -> list[str]:
     hosts: list[str] = []
     for item in raw["destinations"]:
-        if item.get("enabled", True) is False:
+        if not destination_active(item, env):
             continue
-        if item.get("optional") and not env.get(item.get("env", ""), ""):
-            # Optional rows with static hosts stay disabled unless enabled: true.
-            if "hosts" in item and item.get("optional"):
-                continue
         hosts.extend(item.get("hosts") or [])
+        if item.get("env_value"):
+            continue
         env_name = item.get("env")
         if env_name and env.get(env_name):
             hosts.append(env[env_name])
@@ -33,11 +46,13 @@ def allowed_hosts(raw: dict, env: dict[str, str]) -> list[str]:
 def host_allowed(host: str, raw: dict, env: dict[str, str]) -> bool:
     host = host.lower().rstrip(".")
     for item in raw["destinations"]:
-        if item.get("enabled", True) is False:
+        if not destination_active(item, env):
             continue
         for listed in item.get("hosts") or []:
             if host == listed.lower():
                 return True
+        if item.get("env_value"):
+            continue
         env_name = item.get("env")
         configured = env.get(env_name, "").lower() if env_name else ""
         if configured and host == configured:

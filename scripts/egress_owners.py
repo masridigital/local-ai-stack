@@ -20,6 +20,13 @@ NO_EGRESS_CANDIDATES = (
     "postgres",
     "caddy",
     "cloudflared",
+    "litellm",
+)
+
+# Open WebUI must not open a socket to LiteLLM. This runs before the loopback accept.
+LITELLM_DENY = (
+    "-A ufw-before-output -m owner --uid-owner openwebui -d 127.0.0.2 -p tcp --dport 4000 -j REJECT",
+    "-A ufw-before-output -m owner --uid-owner openwebui -d 127.0.0.1 -p tcp --dport 4000 -j REJECT",
 )
 
 
@@ -30,13 +37,25 @@ def load_destinations(path: Path) -> dict:
     return raw
 
 
+def destination_active(item: dict, env: dict[str, str]) -> bool:
+    if item.get("enabled", True) is False:
+        return False
+    if item.get("install_only") and env.get("INSTALL_EGRESS", "") != "1":
+        return False
+    if item.get("optional") and item.get("env"):
+        value = env.get(item["env"], "")
+        expected = item.get("env_value")
+        if expected is not None:
+            return value == expected
+        return bool(value)
+    return True
+
+
 def active_destinations(raw: dict, env: dict[str, str] | None = None) -> list[dict]:
     env = env or {}
     active = []
     for item in raw["destinations"]:
-        if item.get("enabled", True) is False:
-            continue
-        if item.get("optional") and item.get("env") and not env.get(item["env"], ""):
+        if not destination_active(item, env):
             continue
         if not item.get("users"):
             raise ValueError(f"destination {item.get('name')} has no users")
@@ -59,7 +78,7 @@ def _hosts(item: dict, env: dict[str, str]) -> list[str]:
     hosts = list(item.get("hosts") or [])
     env_name = item.get("env")
     configured = env.get(env_name, "") if env_name else ""
-    if configured:
+    if configured and not item.get("env_value"):
         suffix = item.get("host_suffix")
         if suffix and not configured.lower().rstrip(".").endswith(suffix.lower()):
             raise ValueError(f"{configured} does not match {suffix}")
@@ -88,14 +107,16 @@ def render_owner_rules(raw: dict, resolutions: dict[str, list[str]], env: dict[s
     active = active_destinations(raw, env)
     egress_users = {user for item in active for user in item["users"]}
     lines = [
-        "# Owner-matched OUTPUT rules. Loopback first, then per-uid ACCEPTs, then REJECT for users with no egress.",
-        "# ACCEPT lines for resolved addresses are inserted by install.sh. This file is the committed policy.",
+        "# Owner-matched OUTPUT rules. Block Open WebUI from LiteLLM, then loopback,",
+        "# then per-uid ACCEPTs for resolved addresses, then REJECT for users with no egress.",
+        "# install.sh inserts the resolved ACCEPT lines. Hostnames are not used here.",
     ]
     for item in active:
         users = ",".join(item["users"])
         for host in _hosts(item, env):
             for port in _ports(item, env):
                 lines.append(f"# {users} -> {host}:{port}/{item['proto']}")
+    lines.extend(LITELLM_DENY)
     lines.append("-A ufw-before-output -o lo -j ACCEPT")
     for item in active:
         for host in _hosts(item, env):
@@ -127,22 +148,25 @@ def resolve_hosts(raw: dict, env: dict[str, str] | None = None) -> dict[str, lis
 
 
 def splice_before_rules(before_text: str, block: str) -> str:
+    """Insert owner rules before UFW's loopback OUTPUT accept.
+
+    Ubuntu's before.rules accepts every loopback packet before the established
+    rule. A REJECT spliced after that accept never sees 127.0.0.1 or 127.0.0.2.
+    """
     begin = "# BEGIN local-ai-owner"
     end = "# END local-ai-owner"
-    payload = f"{begin}\n{block.rstrip()}\n{end}\n"
     if begin in before_text and end in before_text:
         start = before_text.index(begin)
         finish = before_text.index(end) + len(end)
-        # keep a trailing newline if the original had one after the marker
-        suffix = before_text[finish:]
-        if suffix.startswith("\n"):
-            suffix = suffix[1:]
-        return before_text[:start] + payload + suffix
-    marker = "-A ufw-before-output -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT"
+        if before_text[finish:].startswith("\n"):
+            finish += 1
+        before_text = before_text[:start] + before_text[finish:]
+    payload = f"{begin}\n{block.rstrip()}\n{end}\n"
+    marker = "-A ufw-before-output -o lo -j ACCEPT"
     if marker not in before_text:
-        raise ValueError("ufw before.rules has no established OUTPUT rule to anchor on")
-    insert_at = before_text.index(marker) + len(marker)
-    return before_text[:insert_at] + "\n" + payload + before_text[insert_at:]
+        raise ValueError("ufw before.rules has no loopback OUTPUT accept to anchor on")
+    insert_at = before_text.index(marker)
+    return before_text[:insert_at] + payload + before_text[insert_at:]
 
 
 def main() -> None:

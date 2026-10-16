@@ -30,7 +30,7 @@ CapabilityBoundingSet=
 UMask=0077
 ReadWritePaths=/var/lib/local-ai-stack/presidio-anonymizer
 IPAddressDeny=any
-IPAddressAllow=localhost
+IPAddressAllow=127.0.0.1
 
 [Install]
 WantedBy=local-ai-stack.target

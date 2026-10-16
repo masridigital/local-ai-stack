@@ -19,6 +19,8 @@ done
 
 if [[ "$MODE" == "check" ]]; then
   python3 "$ROOT/scripts/check_tree.py"
+  python3 "$ROOT/scripts/check_luks.py" --self-check
+  bash "$ROOT/host/install.sh" --check
   exit 0
 fi
 
@@ -28,6 +30,11 @@ if [[ "$(id -u)" -ne 0 ]]; then
 fi
 
 export DEBIAN_FRONTEND=noninteractive
+apt-get update
+apt-get install -y cryptsetup
+bash "$ROOT/host/luks-data.sh" --apply
+python3 "$ROOT/scripts/check_luks.py" --target /var/lib/local-ai-stack
+bash "$ROOT/host/install.sh" --apply --skip-ufw
 apt-get update
 apt-get install -y \
   python3 \
@@ -116,6 +123,11 @@ install_config "$ROOT/deploy/env/litellm.env" /etc/litellm/config.env
 install_config "$ROOT/deploy/env/policy-gateway.env" /etc/policy-gateway/config.env
 install_config "$ROOT/deploy/env/open-webui.env" /etc/open-webui/config.env
 
+if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -q "Status: active"; then
+  # Re-running apply on a locked host needs pip and the model hosts, then drops them.
+  INSTALL_EGRESS=1 python3 "$ROOT/scripts/egress_owners.py" --apply-ufw --dest "$ROOT/deploy/egress-destinations.yaml"
+fi
+
 install_venv() {
   local dest="$1"
   shift
@@ -148,16 +160,20 @@ if [[ "${ALLOW_EMBEDDING_DOWNLOAD:-1}" == "1" ]] && [[ ! -d /var/lib/local-ai-st
   chown -R openwebui:openwebui /var/lib/local-ai-stack/webui
 fi
 
-bash "$ROOT/deploy/write-secret.sh" /etc/postgres/postgres_password POSTGRES_PASSWORD
-bash "$ROOT/deploy/write-secret.sh" /etc/litellm/litellm_master_key LITELLM_MASTER_KEY
-bash "$ROOT/deploy/write-secret.sh" /etc/litellm/anthropic_api_key ANTHROPIC_API_KEY
-bash "$ROOT/deploy/write-secret.sh" /etc/litellm/azure_client_secret AZURE_CLIENT_SECRET
-bash "$ROOT/deploy/write-secret.sh" /etc/litellm/database_url DATABASE_URL
-bash "$ROOT/deploy/write-secret.sh" /etc/policy-gateway/litellm_virtual_key LITELLM_VIRTUAL_KEY
-bash "$ROOT/deploy/write-secret.sh" /etc/policy-gateway/audit_database_url AUDIT_DATABASE_URL
-bash "$ROOT/deploy/write-secret.sh" /etc/open-webui/webui_secret_key WEBUI_SECRET_KEY
-bash "$ROOT/deploy/write-secret.sh" /etc/open-webui/microsoft_client_secret MICROSOFT_CLIENT_SECRET
-bash "$ROOT/deploy/write-secret.sh" /etc/open-webui/litellm_virtual_key LITELLM_VIRTUAL_KEY
+bash "$ROOT/host/secrets/populate.sh"
+# Anthropic key and its egress rule exist only while the BAA switch is on.
+baa_stamp=/var/lib/local-ai-stack/litellm/baa-switch
+baa_previous=false
+if [[ -f "$baa_stamp" ]]; then
+  baa_previous="$(<"$baa_stamp")"
+fi
+baa_current=false
+if [[ "${ANTHROPIC_BAA_ENABLED:-false}" == "true" ]]; then
+  baa_current=true
+  bash "$ROOT/deploy/write-secret.sh" /etc/litellm/anthropic_api_key ANTHROPIC_API_KEY
+else
+  rm -f /etc/litellm/anthropic_api_key
+fi
 bash "$ROOT/deploy/write-secret.sh" /etc/cloudflared/credentials.json CLOUDFLARED_CREDENTIALS_JSON
 
 bind_postgres_data() {
@@ -216,52 +232,36 @@ install -m 0644 "$ROOT/deploy/wireguard/wg0.conf.example" /usr/share/local-ai-st
 
 bind_ip="${VPN_BIND_IP:-127.0.0.1}"
 wildcard="$(printf '%s.%s.%s.%s' 0 0 0 0)"
-if [[ "$bind_ip" == "$wildcard" ]] || [[ ! "$bind_ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+if [[ "$bind_ip" == "::" || "$bind_ip" == "::0" || "$bind_ip" == "$wildcard" ]] || [[ ! "$bind_ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
   echo "VPN_BIND_IP must be a loopback or VPN address" >&2
   exit 1
 fi
 printf '[Service]\nEnvironment=VPN_BIND_IP=%s\n' "$bind_ip" > /etc/systemd/system/caddy.service.d/20-bind.conf
+if [[ -n "${VPN_SSH_CIDR:-}" ]]; then
+  world="$(printf '%s.%s.%s.%s/0' 0 0 0 0)"
+  if [[ "$VPN_SSH_CIDR" == "$world" || "$VPN_SSH_CIDR" == "any" || "$VPN_SSH_CIDR" == "::/0" ]] \
+    || [[ ! "$VPN_SSH_CIDR" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}/([0-9]|[1-2][0-9]|3[0-2])$ ]]; then
+    echo "VPN_SSH_CIDR must be an IPv4 prefix" >&2
+    exit 1
+  fi
+  # Peer filter. systemd does not accept hostnames here; the prefix is an address.
+  printf '[Service]\nIPAddressAllow=%s\n' "$VPN_SSH_CIDR" > /etc/systemd/system/caddy.service.d/30-vpn-clients.conf
+fi
 
 if [[ -n "${AZURE_API_HOST:-}" ]]; then
   if [[ ! "$AZURE_API_HOST" =~ ^[A-Za-z0-9.-]+\.openai\.azure\.com$ ]]; then
     echo "AZURE_API_HOST must be a hostname ending in .openai.azure.com" >&2
     exit 1
   fi
-  install -d -m 0755 /etc/systemd/system/litellm.service.d
-  printf '[Service]\nIPAddressAllow=%s\n' "$AZURE_API_HOST" > /etc/systemd/system/litellm.service.d/azure.conf
+  # Resolved by host/ufw.sh into an owner-matched rule. systemd cannot allow a hostname.
+  rm -f /etc/systemd/system/litellm.service.d/azure.conf
 fi
 
 install -m 0644 "$ROOT/deploy/sysctl/99-local-ai.conf" /etc/sysctl.d/99-local-ai.conf
 sysctl --system >/dev/null
 
-cat >/etc/apt/apt.conf.d/20auto-upgrades <<'EOF'
-APT::Periodic::Update-Package-Lists "1";
-APT::Periodic::Unattended-Upgrade "1";
-APT::Periodic::AutocleanInterval "7";
-EOF
-cat >/etc/apt/apt.conf.d/52local-ai-reboot <<'EOF'
-Unattended-Upgrade::Automatic-Reboot "true";
-Unattended-Upgrade::Automatic-Reboot-Time "03:30";
-EOF
-
-if [[ -f /etc/docker/daemon.json ]] && grep -q 'tcp://' /etc/docker/daemon.json; then
-  echo "refusing to leave a Docker TCP socket configured" >&2
-  exit 1
-fi
-
-ufw default deny incoming
-ufw default deny outgoing
-ufw allow in on lo
-ufw allow out on lo
-if [[ -n "${VPN_SSH_CIDR:-}" ]]; then
-  ufw allow from "${VPN_SSH_CIDR}" to any port 22 proto tcp
-  ufw allow from "${VPN_SSH_CIDR}" to any port 443 proto tcp
-fi
-if [[ -n "${WIREGUARD_LISTEN_PORT:-}" ]]; then
-  ufw allow "${WIREGUARD_LISTEN_PORT}/udp"
-fi
-python3 "$ROOT/scripts/egress_owners.py" --apply-ufw --dest "$ROOT/deploy/egress-destinations.yaml"
-ufw --force enable
+bash "$ROOT/host/ufw.sh"
+python3 "$ROOT/scripts/check_luks.py" --target /var/lib/local-ai-stack
 
 if [[ ! -f /var/lib/local-ai-stack/certs/webui.key ]]; then
   openssl req -x509 -newkey rsa:2048 -nodes \
@@ -276,6 +276,21 @@ if [[ "${APPLY_SSH_HARDENING:-0}" == "1" ]]; then
   systemctl reload ssh || systemctl reload sshd
 fi
 
+bash "$ROOT/deploy/litellm-baa-dropin.sh" "$baa_current" \
+  /etc/systemd/system/litellm.service.d \
+  "$ROOT/deploy/systemd/litellm.service.d/10-anthropic.conf"
+install -d -m 0755 /etc/local-ai-stack
+{
+  printf 'ANTHROPIC_BAA_ENABLED=%s\n' "$baa_current"
+  if [[ -n "${AZURE_API_HOST:-}" ]]; then
+    printf 'AZURE_API_HOST=%s\n' "$AZURE_API_HOST"
+  fi
+} > /etc/local-ai-stack/egress.env
+chmod 0644 /etc/local-ai-stack/egress.env
+install -m 0755 "$ROOT/deploy/egress-refresh.sh" /usr/local/sbin/local-ai-egress-refresh
+sed "s|@LOCAL_AI_ROOT@|$ROOT|g" "$ROOT/deploy/systemd/local-ai-egress-refresh.service" \
+  > /etc/systemd/system/local-ai-egress-refresh.service
+install -m 0644 "$ROOT/deploy/systemd/local-ai-egress-refresh.timer" /etc/systemd/system/local-ai-egress-refresh.timer
 systemctl daemon-reload
 systemctl enable postgresql.service
 systemctl enable presidio-analyzer.service
@@ -295,5 +310,32 @@ fi
 systemctl enable systemd-timesyncd
 systemctl restart systemd-journald || true
 systemctl enable auditd || true
+systemctl enable --now local-ai-egress-refresh.timer
+
+systemctl restart litellm.service
+litellm_up=0
+for _ in $(seq 1 60); do
+  if curl -fsS --max-time 2 http://127.0.0.2:4000/health/liveliness >/dev/null; then
+    litellm_up=1
+    break
+  fi
+  sleep 1
+done
+if [[ "$litellm_up" -ne 1 ]]; then
+  echo "LiteLLM did not come up; virtual key was not scoped" >&2
+  exit 1
+fi
+if [[ "$baa_previous" != "$baa_current" ]]; then
+  export SCOPE_VIRTUAL_KEY_FORCE=1
+fi
+LITELLM_MASTER_KEY_FILE=/etc/litellm/litellm_master_key \
+  VIRTUAL_KEY_DEST=/etc/policy-gateway/litellm_virtual_key \
+  LITELLM_BASE_URL=http://127.0.0.2:4000 \
+  ANTHROPIC_BAA_ENABLED="$baa_current" \
+  python3 "$ROOT/scripts/scope_virtual_key.py"
+unset SCOPE_VIRTUAL_KEY_FORCE
+install -d -m 0755 "$(dirname "$baa_stamp")"
+printf '%s\n' "$baa_current" > "$baa_stamp"
+chmod 0644 "$baa_stamp"
 
 echo "install complete; native units are enabled and cloudflared is disabled"

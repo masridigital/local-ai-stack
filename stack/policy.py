@@ -17,6 +17,21 @@ class FoundryPolicy:
 
 
 @dataclass(frozen=True)
+class EntraTeam:
+    team_id: str
+    models: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class EntraPolicy:
+    tenant_id: str
+    issuer: str
+    enforce_roles: bool
+    role_header: str
+    teams: dict[str, EntraTeam]
+
+
+@dataclass(frozen=True)
 class Policy:
     mask_score_threshold: float
     streaming_enabled: bool
@@ -34,6 +49,8 @@ class Policy:
     recall_floors: dict[str, float]
     chat_retention_days: int
     audit_review: dict
+    model_aliases: dict[str, str]
+    entra: EntraPolicy
 
 
 # Longer names first so "eastus" does not swallow "eastus2".
@@ -106,6 +123,22 @@ def load_policy(path: Path, runtime: dict | None = None) -> Policy:
         recall_floors={k: float(v) for k, v in raw["recall_floors"].items()},
         chat_retention_days=int(raw["chat_retention_days"]),
         audit_review=dict(raw["audit_review"]),
+        model_aliases={str(key): str(value) for key, value in raw["model_aliases"].items()},
+        entra=_load_entra(raw["entra"]),
+    )
+
+
+def _load_entra(raw: dict) -> EntraPolicy:
+    teams = {
+        name: EntraTeam(team_id=str(item["team_id"]), models=tuple(item["models"]))
+        for name, item in raw["teams"].items()
+    }
+    return EntraPolicy(
+        tenant_id=str(raw["tenant_id"]),
+        issuer=str(raw["issuer"]),
+        enforce_roles=bool(raw["enforce_roles"]),
+        role_header=str(raw["role_header"]),
+        teams=teams,
     )
 
 
@@ -115,6 +148,62 @@ class FoundryRuntime:
     model_family: str
     region: str
     api_base: str
+
+
+def resolve_model(model: str, policy: Policy, foundry: FoundryRuntime) -> tuple[str, str]:
+    """Return the LiteLLM model_name and the provider id used for the allowlist."""
+    aliases = policy.model_aliases
+    if model in aliases:
+        return model, _expand_alias(aliases[model], foundry)
+    for name, provider in aliases.items():
+        expanded = _expand_alias(provider, foundry)
+        if model == provider or model == expanded:
+            return name, expanded
+    return model, model
+
+
+def _expand_alias(provider: str, foundry: FoundryRuntime) -> str:
+    if provider == "azure":
+        return f"azure/{foundry.deployment}"
+    return provider
+
+
+def _model_permitted(model: str, patterns: tuple[str, ...]) -> bool:
+    for pattern in patterns:
+        if pattern.endswith("*") and model.startswith(pattern[:-1]):
+            return True
+        if model == pattern:
+            return True
+    return False
+
+
+def resolve_entra_team(
+    headers: dict[str, str],
+    litellm_model: str,
+    provider_model: str,
+    policy: Policy,
+) -> str:
+    from stack.errors import PolicyError
+
+    entra = policy.entra
+    if not entra.enforce_roles:
+        return ""
+    raw = ""
+    for key, value in headers.items():
+        if key.lower() == entra.role_header.lower():
+            raw = value or ""
+            break
+    roles = [part.strip() for part in raw.split(",") if part.strip()]
+    team: EntraTeam | None = None
+    if "phi" in roles and "phi" in entra.teams:
+        team = entra.teams["phi"]
+    elif "non-phi" in roles and "non-phi" in entra.teams:
+        team = entra.teams["non-phi"]
+    if team is None:
+        raise PolicyError("entra_role_required", "an Entra app role that maps to a model team is required")
+    if _model_permitted(litellm_model, team.models) or _model_permitted(provider_model, team.models):
+        return team.team_id
+    raise PolicyError("entra_model_denied", "Entra app role does not allow this model")
 
 
 def classify_model(model: str, policy: Policy, foundry: FoundryRuntime) -> str:

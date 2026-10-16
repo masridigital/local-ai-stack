@@ -2,7 +2,19 @@
 # Load LiteLLM credentials from systemd LoadCredential. Do not print them.
 set -euo pipefail
 
+if [[ $- == *x* ]]; then
+  echo "refusing to start with xtrace" >&2
+  exit 1
+fi
+
 cred="${CREDENTIALS_DIRECTORY:?}"
+bind_host="${BIND_HOST:-127.0.0.2}"
+case "$bind_host" in
+  ::|::0|::*|0.*)
+    echo "refusing wildcard bind" >&2
+    exit 1
+    ;;
+esac
 
 read_cred() {
   local file="$1"
@@ -14,9 +26,13 @@ read_cred() {
 }
 
 LITELLM_MASTER_KEY="$(read_cred litellm_master_key)"
-ANTHROPIC_API_KEY="$(read_cred anthropic_api_key)"
 AZURE_CLIENT_SECRET="$(read_cred azure_client_secret)"
 DATABASE_URL="$(read_cred database_url)"
-export LITELLM_MASTER_KEY ANTHROPIC_API_KEY AZURE_CLIENT_SECRET DATABASE_URL
+export LITELLM_MASTER_KEY AZURE_CLIENT_SECRET DATABASE_URL
+# The Anthropic key file is written only when ANTHROPIC_BAA_ENABLED=true.
+if [[ -f "${cred}/anthropic_api_key" ]]; then
+  ANTHROPIC_API_KEY="$(read_cred anthropic_api_key)"
+  export ANTHROPIC_API_KEY
+fi
 export LITELLM_LOG=ERROR
-exec /opt/litellm/venv/bin/litellm --config /opt/litellm/config.yaml --host 127.0.0.1 --port 4000
+exec "${LITELLM_BIN:-/opt/litellm/venv/bin/litellm}" --config /opt/litellm/config.yaml --host "$bind_host" --port 4000
