@@ -25,7 +25,7 @@ While the stack is down, staff stay off PHI tools. There is no emergency route t
 ## Detect and contain
 
 1. Record the time the event was known to any workforce member. That time is “discovery” for the FTC rule and the start of the HIPAA clocks. It is not, by itself, the NYDFS determination time.
-2. Stop the stack: `sudo systemctl stop local-ai-stack.target`. Leave WireGuard up if that is how the host is administered. Do not start `cloudflared`.
+2. Stop the stack: `sudo systemctl stop local-ai-stack.target`. Leave WireGuard up if that is how the host is administered. Do not install `cloudflared`.
 3. Preserve redacted evidence only: `audit_event` rows, `journalctl -u presidio-analyzer -u presidio-anonymizer -u litellm -u policy-gateway -u open-webui -u caddy --since <time>`, `ufw status verbose`, and the `config_hash` on the latest `config_change` row. Do not copy a raw prompt into the ticket, a chat, or `/tmp`.
 4. If a credential may have left the host, revoke it at the vendor and replace the root-owned file under `/etc/<app>` (mode 0600). Do not write the new secret into the ticket.
 5. Outbound is already default-deny. Do not open it to “get logs off the box” onto a new host.

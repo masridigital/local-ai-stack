@@ -26,7 +26,7 @@ Status words: **met** (control exists in this repo), **procedure** (this `docs/`
 | 164.312(e)(1)–(2) | Transmission security | Caddy TLS 1.2+ (`deploy/Caddyfile`); HTTPS egress. Loopback HTTP between units | Met on the wire that leaves the host. Loopback HTTP accepted in the risk assessment |
 | 164.316 | Policies, six-year retention | This `docs/` set. `docs/retention-disposal.md` | Procedure |
 | 500.2, 500.3 | Cybersecurity program and written policy | `docs/ai-use-policy-template.md`, `docs/host-hardening.md` | Procedure, if the entity is a Covered Entity and not exempt under 500.19 |
-| 500.6 | Audit trail | `docs/retention-disposal.md` | Procedure. (a)(2) floor is three years; (a)(1) floor is five; rows are kept six |
+| 500.6 | Audit trail | `docs/retention-disposal.md`, `docs/disposal-schedule.md` | Procedure. (a)(2) floor is three years; (a)(1) floor is five. The schedule keeps 6 years HIPAA documentation / 5 years NYDFS, whichever the record requires. A longer period is not chosen |
 | 500.7 | Access privileges | Entra group, quarterly review, empty MCP allowlist | Partial. Annual review procedure is written; the first review is operational |
 | 500.8 | Application security | `.github/workflows/ci.yml` (pytest, shellcheck, bandit, gitleaks, Trivy, SBOM) | Met for this in-house gateway |
 | 500.9 | Risk assessment | `docs/risk-assessment-template.md` | Procedure |
@@ -56,7 +56,7 @@ Status words: **met** (control exists in this repo), **procedure** (this `docs/`
 
 ## Map items that are closed or moved
 
-- Cloudflare seeing raw prompts (control-map P0): closed. No tunnel route. Test `test_07_and_09_exposure_and_tunnel`.
+- Cloudflare seeing raw prompts (control-map P0): closed. `cloudflared` is not installed. Test `test_07_and_09_exposure_and_tunnel`.
 - Open WebUI history not called out: closed as a design item. The directory is on LUKS and purged at 30 days.
 - Qualified Individual unnamed: closed. Joseph Masri (Cap).
 - Written AI-use policy, risk assessment, IR clocks, disposal: this directory.
