@@ -54,6 +54,13 @@ def check() -> list[str]:
             if "CapabilityBoundingSet=" in unit and "CapabilityBoundingSet=CAP_" in unit:
                 errors.append(f"{app['unit']} keeps a capability")
         for cred in app["credentials"]:
+            if app["unit"] == "litellm.service" and cred == "anthropic_api_key":
+                if f"LoadCredential={cred}:" in unit:
+                    errors.append("litellm.service must not load anthropic_api_key")
+                dropin = ROOT / "deploy" / "systemd" / "litellm.service.d" / "10-anthropic.conf"
+                if f"LoadCredential={cred}:" not in dropin.read_text(encoding="utf-8"):
+                    errors.append("anthropic drop-in is missing LoadCredential")
+                continue
             if f"LoadCredential={cred}:" not in unit:
                 errors.append(f"{app['unit']} missing LoadCredential {cred}")
         if app["opt"] not in install:

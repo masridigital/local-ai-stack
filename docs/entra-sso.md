@@ -6,7 +6,7 @@ Zitadel is an unused fallback and is not configured on this stack.
 
 ## App registration
 
-1. Register an app for Open WebUI. Redirect URI: `https://webui.lan.internal/oauth/microsoft/callback` (the real LAN name, not a public hostname). Platform: web. Allow public client flows so PKCE (`S256`, `OAUTH_CODE_CHALLENGE_METHOD`) can run. The client secret still lives only in `/etc/open-webui/microsoft_client_secret`.
+1. Register an app for Open WebUI. Redirect URI: `https://webui.lan.internal/oauth/microsoft/callback` (the real LAN name, not a public hostname). Platform: web. This is a confidential client: PKCE (`S256`, `OAUTH_CODE_CHALLENGE_METHOD`) runs with the client secret. Do not enable public client flows. The secret stays in `/etc/open-webui/microsoft_client_secret`.
 2. Supported accounts: this tenant only.
 3. API permissions: `openid`, `email`, `profile`. Admin consent. Optional claim: `roles` in the ID token.
 4. App roles, value and display name the same: `phi`, `non-phi`, `admin`. Assign `phi` or `non-phi` for model access. Assign `admin` only to the operators who administer Open WebUI. `admin` alone does not grant a model team.
@@ -24,7 +24,7 @@ Local signup is off (`ENABLE_SIGNUP=false`). The password form is off (`ENABLE_L
 
 Open WebUI promotes the sole user to admin. A bootstrap account is created at startup from `WEBUI_ADMIN_EMAIL=webui-bootstrap@local-ai.internal` and `WEBUI_ADMIN_PASSWORD` (LoadCredential, mode 0600, generated, not in git). The password form is off, and `OAUTH_MERGE_ACCOUNTS_BY_EMAIL=false`, so that account is not a sign-in path and the first Entra login is not an admin. Human admins come from the Entra app role `admin`.
 
-The same `roles` claim is copied into Open WebUI groups (`OAUTH_GROUPS_CLAIM=roles`). The gateway reads `X-Entra-App-Roles: {{USER_GROUPS}}`. `phi` may call the PHI models. `non-phi` may call Haiku only.
+The same `roles` claim is copied into Open WebUI groups (`OAUTH_GROUPS_CLAIM=roles`). Open WebUI 0.12.2 replaces `{{USER_GROUPS}}` in `OPENAI_API_CONFIGS` with the comma-separated group names (`parse_custom_headers` in `backend/open_webui/utils/headers.py`). A comma is left as a comma, so the gateway receives `X-Entra-App-Roles: phi` or `phi,non-phi`. `phi` may call the PHI models. `non-phi` may call Haiku only.
 
 ## Gateway credential and LiteLLM
 
@@ -51,4 +51,4 @@ There is no shared daily admin password in the repo.
 
 ## LiteLLM admin API
 
-LiteLLM binds `127.0.0.2:4000` and has no tunnel route. The master key is `/etc/litellm/litellm_master_key`. Anyone who needs the admin API uses the VPN and an SSH forward to that loopback address.
+LiteLLM binds `127.0.0.2:4000` and has no tunnel route. The master key is `/etc/litellm/litellm_master_key`. An admin on the VPN can open a local SSH forward only: `ssh -L 4000:127.0.0.2:4000`. `AllowTcpForwarding local` and `PermitOpen 127.0.0.2:4000` allow that and refuse remote forwarding and every other destination.

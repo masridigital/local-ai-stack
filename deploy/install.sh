@@ -162,7 +162,14 @@ fi
 
 bash "$ROOT/host/secrets/populate.sh"
 # Anthropic key and its egress rule exist only while the BAA switch is on.
+baa_stamp=/var/lib/local-ai-stack/litellm/baa-switch
+baa_previous=false
+if [[ -f "$baa_stamp" ]]; then
+  baa_previous="$(<"$baa_stamp")"
+fi
+baa_current=false
 if [[ "${ANTHROPIC_BAA_ENABLED:-false}" == "true" ]]; then
+  baa_current=true
   bash "$ROOT/deploy/write-secret.sh" /etc/litellm/anthropic_api_key ANTHROPIC_API_KEY
 else
   rm -f /etc/litellm/anthropic_api_key
@@ -269,6 +276,21 @@ if [[ "${APPLY_SSH_HARDENING:-0}" == "1" ]]; then
   systemctl reload ssh || systemctl reload sshd
 fi
 
+bash "$ROOT/deploy/litellm-baa-dropin.sh" "$baa_current" \
+  /etc/systemd/system/litellm.service.d \
+  "$ROOT/deploy/systemd/litellm.service.d/10-anthropic.conf"
+install -d -m 0755 /etc/local-ai-stack
+{
+  printf 'ANTHROPIC_BAA_ENABLED=%s\n' "$baa_current"
+  if [[ -n "${AZURE_API_HOST:-}" ]]; then
+    printf 'AZURE_API_HOST=%s\n' "$AZURE_API_HOST"
+  fi
+} > /etc/local-ai-stack/egress.env
+chmod 0644 /etc/local-ai-stack/egress.env
+install -m 0755 "$ROOT/deploy/egress-refresh.sh" /usr/local/sbin/local-ai-egress-refresh
+sed "s|@LOCAL_AI_ROOT@|$ROOT|g" "$ROOT/deploy/systemd/local-ai-egress-refresh.service" \
+  > /etc/systemd/system/local-ai-egress-refresh.service
+install -m 0644 "$ROOT/deploy/systemd/local-ai-egress-refresh.timer" /etc/systemd/system/local-ai-egress-refresh.timer
 systemctl daemon-reload
 systemctl enable postgresql.service
 systemctl enable presidio-analyzer.service
@@ -288,13 +310,32 @@ fi
 systemctl enable systemd-timesyncd
 systemctl restart systemd-journald || true
 systemctl enable auditd || true
+systemctl enable --now local-ai-egress-refresh.timer
 
-# Best effort. A stopped LiteLLM must not fail the install; the key stays scoped when it answers.
-if [[ -f /etc/litellm/litellm_master_key ]]; then
-  LITELLM_MASTER_KEY_FILE=/etc/litellm/litellm_master_key \
+systemctl restart litellm.service
+litellm_up=0
+for _ in $(seq 1 60); do
+  if curl -fsS --max-time 2 http://127.0.0.2:4000/health/liveliness >/dev/null; then
+    litellm_up=1
+    break
+  fi
+  sleep 1
+done
+if [[ "$litellm_up" -ne 1 ]]; then
+  echo "LiteLLM did not come up; virtual key was not scoped" >&2
+  exit 1
+fi
+if [[ "$baa_previous" != "$baa_current" ]]; then
+  export SCOPE_VIRTUAL_KEY_FORCE=1
+fi
+LITELLM_MASTER_KEY_FILE=/etc/litellm/litellm_master_key \
   VIRTUAL_KEY_DEST=/etc/policy-gateway/litellm_virtual_key \
   LITELLM_BASE_URL=http://127.0.0.2:4000 \
-    python3 "$ROOT/scripts/scope_virtual_key.py" || echo "virtual key scope deferred until LiteLLM is up" >&2
-fi
+  ANTHROPIC_BAA_ENABLED="$baa_current" \
+  python3 "$ROOT/scripts/scope_virtual_key.py"
+unset SCOPE_VIRTUAL_KEY_FORCE
+install -d -m 0755 "$(dirname "$baa_stamp")"
+printf '%s\n' "$baa_current" > "$baa_stamp"
+chmod 0644 "$baa_stamp"
 
 echo "install complete; native units are enabled and cloudflared is disabled"

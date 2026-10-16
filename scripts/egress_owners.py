@@ -148,22 +148,25 @@ def resolve_hosts(raw: dict, env: dict[str, str] | None = None) -> dict[str, lis
 
 
 def splice_before_rules(before_text: str, block: str) -> str:
+    """Insert owner rules before UFW's loopback OUTPUT accept.
+
+    Ubuntu's before.rules accepts every loopback packet before the established
+    rule. A REJECT spliced after that accept never sees 127.0.0.1 or 127.0.0.2.
+    """
     begin = "# BEGIN local-ai-owner"
     end = "# END local-ai-owner"
-    payload = f"{begin}\n{block.rstrip()}\n{end}\n"
     if begin in before_text and end in before_text:
         start = before_text.index(begin)
         finish = before_text.index(end) + len(end)
-        # keep a trailing newline if the original had one after the marker
-        suffix = before_text[finish:]
-        if suffix.startswith("\n"):
-            suffix = suffix[1:]
-        return before_text[:start] + payload + suffix
-    marker = "-A ufw-before-output -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT"
+        if before_text[finish:].startswith("\n"):
+            finish += 1
+        before_text = before_text[:start] + before_text[finish:]
+    payload = f"{begin}\n{block.rstrip()}\n{end}\n"
+    marker = "-A ufw-before-output -o lo -j ACCEPT"
     if marker not in before_text:
-        raise ValueError("ufw before.rules has no established OUTPUT rule to anchor on")
-    insert_at = before_text.index(marker) + len(marker)
-    return before_text[:insert_at] + "\n" + payload + before_text[insert_at:]
+        raise ValueError("ufw before.rules has no loopback OUTPUT accept to anchor on")
+    insert_at = before_text.index(marker)
+    return before_text[:insert_at] + payload + before_text[insert_at:]
 
 
 def main() -> None:

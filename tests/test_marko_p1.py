@@ -39,6 +39,7 @@ def test_open_webui_entra_group_and_no_first_admin():
     env = (ROOT / "deploy" / "env" / "open-webui.env").read_text(encoding="utf-8")
     assert "ENABLE_SIGNUP=false" in env
     assert "ENABLE_LOGIN_FORM=false" in env
+    assert "ENABLE_PASSWORD_AUTH=false" in env
     assert "DEFAULT_USER_ROLE=pending" in env
     assert "OAUTH_MERGE_ACCOUNTS_BY_EMAIL=false" in env
     assert "OAUTH_CODE_CHALLENGE_METHOD=S256" in env
@@ -59,6 +60,15 @@ def test_open_webui_entra_group_and_no_first_admin():
     assert "local-ai-users" in doc
     assert "User assignment required" in doc
     assert "Conditional Access" in doc
+    assert "Do not enable public client flows" in doc
+    assert "Allow public client flows" not in doc
+    assert "{{USER_GROUPS}}" in env
+    assert "parse_custom_headers" in doc
+    ssh = (ROOT / "host" / "ssh" / "00-local-ai-vpn.conf").read_text(encoding="utf-8")
+    assert "AllowTcpForwarding local" in ssh
+    assert "PermitOpen 127.0.0.2:4000" in ssh
+    assert "AllowTcpForwarding no" not in ssh
+    assert "ssh -L 4000:127.0.0.2:4000" in doc
 
 
 def test_units_have_no_hostname_allows():
@@ -308,3 +318,54 @@ def test_content_length_and_bind(monkeypatch):
         monkeypatch.setenv("BIND_HOST", host)
         with pytest.raises(SystemExit):
             bind_address()
+
+
+def test_anthropic_dropin_follows_the_switch(tmp_path):
+    unit = (ROOT / "deploy" / "systemd" / "litellm.service").read_text(encoding="utf-8")
+    assert "LoadCredential=anthropic_api_key" not in unit
+    src = ROOT / "deploy" / "systemd" / "litellm.service.d" / "10-anthropic.conf"
+    assert "LoadCredential=anthropic_api_key:/etc/litellm/anthropic_api_key" in src.read_text(encoding="utf-8")
+    script = ROOT / "deploy" / "litellm-baa-dropin.sh"
+    dest = tmp_path / "dropin"
+    on = subprocess.run(["bash", str(script), "true", str(dest), str(src)], check=False, capture_output=True, text=True)
+    assert on.returncode == 0, on.stderr
+    assert (dest / "10-anthropic.conf").is_file()
+    off = subprocess.run(["bash", str(script), "false", str(dest), str(src)], check=False, capture_output=True, text=True)
+    assert off.returncode == 0, off.stderr
+    assert not (dest / "10-anthropic.conf").exists()
+    install = (ROOT / "deploy" / "install.sh").read_text(encoding="utf-8")
+    assert "litellm-baa-dropin.sh" in install
+    assert "systemctl restart litellm.service" in install
+    assert "SCOPE_VIRTUAL_KEY_FORCE" in install
+    assert "baa_previous" in install
+
+
+def test_reject_is_spliced_before_loopback_accept():
+    from scripts.egress_owners import splice_before_rules
+
+    before = (
+        "-A ufw-before-output -o lo -j ACCEPT\n"
+        "-A ufw-before-output -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT\n"
+    )
+    block = "-A ufw-before-output -m owner --uid-owner openwebui -d 127.0.0.2 -p tcp --dport 4000 -j REJECT\n"
+    once = splice_before_rules(before, block)
+    assert once.index("REJECT") < once.index("-o lo -j ACCEPT")
+    twice = splice_before_rules(once, block)
+    assert twice.index("REJECT") < twice.index("-o lo -j ACCEPT")
+    assert twice.count("# BEGIN local-ai-owner") == 1
+
+
+def test_user_groups_header_stays_comma_separated():
+    from string import punctuation
+    from urllib.parse import quote
+
+    # Open WebUI 0.12.2 parse_custom_headers joins group names and quotes with punctuation kept.
+    value = "{{USER_GROUPS}}".replace("{{USER_GROUPS}}", ",".join(["phi", "non-phi"]))
+    encoded = quote(value, safe=punctuation + " \t")
+    assert encoded == "phi,non-phi"
+    refresh = (ROOT / "deploy" / "egress-refresh.sh").read_text(encoding="utf-8")
+    assert "unset INSTALL_EGRESS" in refresh
+    timer = (ROOT / "deploy" / "systemd" / "local-ai-egress-refresh.timer").read_text(encoding="utf-8")
+    assert "OnUnitActiveSec=5min" in timer
+    design = (ROOT / "docs" / "egress-proxy.md").read_text(encoding="utf-8")
+    assert "deploy blocker" in design.lower() or "Deploy blocker" in design or "still a deploy blocker" in design

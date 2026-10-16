@@ -8,7 +8,7 @@ jobs:
   test:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
       - uses: actions/setup-python@v5
@@ -22,11 +22,11 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y shellcheck
-          shellcheck deploy/install.sh deploy/apt-repos.sh deploy/write-secret.sh deploy/litellm-run.sh deploy/open-webui-run.sh deploy/break-glass-enable.sh host/install.sh host/ufw.sh host/luks-data.sh host/secrets/populate.sh
+          shellcheck deploy/install.sh deploy/apt-repos.sh deploy/write-secret.sh deploy/litellm-run.sh deploy/open-webui-run.sh deploy/break-glass-enable.sh deploy/litellm-baa-dropin.sh deploy/egress-refresh.sh host/install.sh host/ufw.sh host/luks-data.sh host/secrets/populate.sh
       - name: bandit
         run: bandit -r stack scripts -q -ll
       - name: gitleaks
-        uses: gitleaks/gitleaks-action@v2
+        uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7 # v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - name: sbom

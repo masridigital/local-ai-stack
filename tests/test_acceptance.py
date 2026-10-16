@@ -361,6 +361,11 @@ def test_08_secrets_are_files_not_env():
     for app in services["apps"]:
         unit = (ROOT / "deploy" / "systemd" / app["unit"]).read_text(encoding="utf-8")
         for cred in app["credentials"]:
+            if app["unit"] == "litellm.service" and cred == "anthropic_api_key":
+                assert f"LoadCredential={cred}:" not in unit
+                dropin = (ROOT / "deploy" / "systemd" / "litellm.service.d" / "10-anthropic.conf").read_text(encoding="utf-8")
+                assert f"LoadCredential={cred}:" in dropin
+                continue
             assert f"LoadCredential={cred}:" in unit
         assert "sk-" not in unit
     for path in (ROOT / "deploy" / "env").glob("*.env"):
@@ -511,6 +516,18 @@ def test_gateway_forwards_litellm_names_and_masks_fields(policy, presidio_servic
     assert result.status == 200
     assert upstream.calls[0]["model"] == "claude-sonnet"
     assert upstream.team_ids == ["phi"]
+    hidden, upstream = _chat(
+        "azure",
+        policy,
+        client,
+        audit,
+        body={
+            "model": "azure/dep-placeholder",
+            "messages": [{"role": "user", "content": "hello", "_mock_note": "MRN-SYN-0001234"}],
+        },
+    )
+    assert hidden.status == 200
+    assert "MRN-SYN-0001234" not in str(upstream.calls[0])
     result, upstream = _chat(
         "azure",
         policy,

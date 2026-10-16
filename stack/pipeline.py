@@ -298,9 +298,6 @@ def _mask_obj(value, presidio: PresidioClient):
         masked = {}
         entities: list[str] = []
         for key, item in value.items():
-            if key.startswith("_mock"):
-                masked[key] = item
-                continue
             if not isinstance(key, str):
                 raise PolicyError("non_text_blocked", "non-text object key")
             new_item, found = _mask_obj(item, presidio)

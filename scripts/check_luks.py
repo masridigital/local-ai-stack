@@ -9,7 +9,6 @@ from __future__ import annotations
 import argparse
 import subprocess
 import sys
-from pathlib import Path
 
 
 def parents_include_crypt(start: str, nodes: dict[str, tuple[str, str]]) -> bool:
@@ -26,26 +25,20 @@ def parents_include_crypt(start: str, nodes: dict[str, tuple[str, str]]) -> bool
 
 
 def parse_lsblk(text: str) -> dict[str, tuple[str, str]]:
+    """Parse `lsblk -rno KNAME,TYPE,PKNAME`. Keys are kernel names."""
     nodes: dict[str, tuple[str, str]] = {}
     for line in text.splitlines():
         parts = line.split()
         if len(parts) < 2:
             continue
-        name, dev_type = parts[0], parts[1]
+        kname, dev_type = parts[0], parts[1]
         parent = parts[2] if len(parts) > 2 else ""
-        nodes[name] = (dev_type, parent)
+        nodes[kname] = (dev_type, parent)
     return nodes
 
 
-def source_name(source: str) -> str:
-    path = source.strip()
-    if path.startswith("/dev/mapper/"):
-        return path.removeprefix("/dev/mapper/")
-    return Path(path).name
-
-
 def live_nodes() -> dict[str, tuple[str, str]]:
-    output = subprocess.check_output(["lsblk", "-rno", "NAME,TYPE,PKNAME"], text=True)
+    output = subprocess.check_output(["lsblk", "-rno", "KNAME,TYPE,PKNAME"], text=True)
     return parse_lsblk(output)
 
 
@@ -54,21 +47,28 @@ def live_source(target: str) -> str:
     return output.strip()
 
 
+def live_kname(source: str) -> str:
+    output = subprocess.check_output(["lsblk", "-ndo", "KNAME", source], text=True)
+    return output.strip()
+
+
 def self_check() -> None:
     encrypted = {
         "sda": ("disk", ""),
         "sda2": ("part", "sda"),
         "dm-0": ("crypt", "sda2"),
-        "ubuntu--vg-root": ("lvm", "dm-0"),
+        "dm-1": ("lvm", "dm-0"),
     }
     plain = {"vda": ("disk", ""), "vda1": ("part", "vda")}
-    if not parents_include_crypt("ubuntu--vg-root", encrypted):
+    if not parents_include_crypt("dm-1", encrypted):
         raise SystemExit("luks walker missed a crypt parent")
     if parents_include_crypt("vda1", plain):
         raise SystemExit("luks walker treated a plain disk as crypt")
-    parsed = parse_lsblk("sda disk\nsda2 part sda\ndm-0 crypt sda2\n")
-    if not parents_include_crypt(source_name("/dev/mapper/dm-0"), parsed):
-        raise SystemExit("luks walker missed a mapper source")
+    parsed = parse_lsblk("sda disk\nsda2 part sda\ndm-0 crypt sda2\ndm-1 lvm dm-0\n")
+    if not parents_include_crypt("dm-1", parsed):
+        raise SystemExit("luks walker missed a KNAME parent")
+    if parents_include_crypt("ubuntu--vg-root", parsed):
+        raise SystemExit("luks walker treated a mapper name as a kernel name")
     print("luks self-check ok")
 
 
@@ -84,10 +84,11 @@ def main() -> None:
         raise SystemExit("usage: check_luks.py --self-check | --target PATH")
     try:
         source = live_source(args.target)
+        kname = live_kname(source)
         nodes = live_nodes()
     except (OSError, subprocess.CalledProcessError) as exc:
         raise SystemExit(f"cannot inspect LUKS for {args.target}: {exc}") from exc
-    if not source or not parents_include_crypt(source_name(source), nodes):
+    if not kname or not parents_include_crypt(kname, nodes):
         raise SystemExit(
             f"{args.target} is not on LUKS. Encrypt the Proxmox disk or set LUKS_DISK before apply."
         )
