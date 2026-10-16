@@ -20,31 +20,35 @@ from scripts.scope_virtual_key import request_body
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_zdr_attestation_stays_true():
+def test_zdr_attestation_stays_false_until_cap_signs():
     text = (ROOT / "litellm" / "policy.yaml").read_text(encoding="utf-8")
-    assert "anthropic_zdr_confirmed_by_cap: true" in text
-    assert "anthropic_zdr_confirmed_by_cap: false" not in text
-    assert "2026-10-15" in text
-    assert "BAA has ZDR" in text
+    assert "anthropic_zdr_confirmed_by_cap: false" in text
+    assert "anthropic_zdr_confirmed_by_cap: true" not in text
     policy = load_policy(ROOT / "litellm" / "policy.yaml")
-    assert policy.anthropic_zdr_confirmed_by_cap is True
+    assert policy.anthropic_zdr_confirmed_by_cap is False
     plan = (ROOT / "PLAN.md").read_text(encoding="utf-8")
     checklist = (ROOT / "docs" / "deploy-checklist.md").read_text(encoding="utf-8")
-    assert "2026-10-15" in plan
-    assert "2026-10-15" in checklist
-    assert "formal document verification" in checklist.lower() or "Formal document verification" in checklist
+    assert "zero data retention" in plan.lower()
+    assert "is false" in plan
+    assert "Cap has not signed" in checklist
 
 
 def test_open_webui_entra_group_and_no_first_admin():
     env = (ROOT / "deploy" / "env" / "open-webui.env").read_text(encoding="utf-8")
     assert "ENABLE_SIGNUP=false" in env
+    assert "ENABLE_OAUTH_SIGNUP=true" in env
     assert "ENABLE_LOGIN_FORM=false" in env
     assert "ENABLE_PASSWORD_AUTH=false" in env
     assert "DEFAULT_USER_ROLE=pending" in env
+    assert "ENABLE_OAUTH_ROLE_MANAGEMENT=true" in env
+    assert "ENABLE_OAUTH_GROUP_MANAGEMENT=true" in env
+    assert "OAUTH_GROUPS_CLAIM=roles" in env
     assert "OAUTH_MERGE_ACCOUNTS_BY_EMAIL=false" in env
     assert "OAUTH_CODE_CHALLENGE_METHOD=S256" in env
     assert "OAUTH_ALLOWED_ROLES=phi,non-phi,admin" in env
     assert "OAUTH_ADMIN_ROLES=admin" in env
+    assert "MICROSOFT_CLIENT_TENANT_ID=" in env
+    assert "AZURE_TENANT_ID=" not in env
     assert "WEBUI_ADMIN_EMAIL=webui-bootstrap@local-ai.internal" in env
     assert "WEBUI_ADMIN_PASSWORD" not in env
     assert "zitadel" not in env.lower()
@@ -57,8 +61,11 @@ def test_open_webui_entra_group_and_no_first_admin():
     assert "IPAddressAllow=" not in unit
     doc = (ROOT / "docs" / "entra-sso.md").read_text(encoding="utf-8")
     assert doc.lower().count("zitadel") == 1
-    assert "local-ai-users" in doc
-    assert "User assignment required" in doc
+    assert "PHI-users" in doc
+    assert "local-ai-users" not in doc
+    assert "Assignment required = Yes" in doc
+    assert "Local signup only is off" in doc
+    assert "Signup is off" not in doc
     assert "Conditional Access" in doc
     assert "Do not enable public client flows" in doc
     assert "Allow public client flows" not in doc
@@ -369,3 +376,235 @@ def test_user_groups_header_stays_comma_separated():
     assert "OnUnitActiveSec=5min" in timer
     design = (ROOT / "docs" / "egress-proxy.md").read_text(encoding="utf-8")
     assert "deploy blocker" in design.lower() or "Deploy blocker" in design or "still a deploy blocker" in design
+
+
+def test_litellm_port_4000_is_gated():
+    """N-3: a direct hit on LiteLLM :4000 is refused unless the virtual key is presented."""
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    virtual = "virtual-key-fixture"
+    gateway = "gateway-key-fixture"
+
+    class Lite(BaseHTTPRequestHandler):
+        def do_GET(self):  # noqa: N802
+            self._reply(401, b'{"error":"gated"}')
+
+        def do_POST(self):  # noqa: N802
+            auth = self.headers.get("Authorization", "")
+            if auth == f"Bearer {virtual}":
+                self._reply(200, b'{"ok":true}')
+                return
+            self._reply(401, b'{"error":"gated"}')
+
+        def _reply(self, status: int, body: bytes) -> None:
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, fmt: str, *args) -> None:
+            return
+
+    server = ThreadingHTTPServer(("127.0.0.2", 4000), Lite)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        def hit(method: str, token: str | None) -> int:
+            conn = http.client.HTTPConnection("127.0.0.2", 4000, timeout=2)
+            conn.putrequest(method, "/v1/chat/completions")
+            body = b"{}"
+            conn.putheader("Content-Length", str(len(body)))
+            if token:
+                conn.putheader("Authorization", f"Bearer {token}")
+            conn.endheaders()
+            if method == "POST":
+                conn.send(body)
+            response = conn.getresponse()
+            response.read()
+            status = response.status
+            conn.close()
+            return status
+
+        assert hit("GET", None) == 401
+        assert hit("POST", gateway) == 401
+        assert hit("POST", None) == 401
+        assert hit("POST", virtual) == 200
+    finally:
+        server.shutdown()
+        server.server_close()
+    env = (ROOT / "deploy" / "env" / "open-webui.env").read_text(encoding="utf-8")
+    assert "OPENAI_API_BASE_URL=http://127.0.0.1:8088/v1" in env
+    assert ":4000" not in env
+    unit = (ROOT / "deploy" / "systemd" / "open-webui.service").read_text(encoding="utf-8")
+    assert "IPAddressDeny=127.0.0.2" in unit
+    assert "litellm_virtual_key" not in unit
+
+
+def test_nft_rejects_litellm_before_loopback_accept():
+    """N-4: nftables (not UFW text) rejects :4000 before loopback accept, and the proxy list is by name."""
+    from stack.egress import host_allowed, load_destinations
+    from scripts.egress_nft import render_nft
+
+    rules = render_nft()
+    loopback = rules.index('oifname "lo" accept')
+    assert rules.index("ip daddr 127.0.0.2 tcp dport 4000 reject") < loopback
+    assert rules.index("ip daddr 127.0.0.1 tcp dport 4000 reject") < loopback
+    checked = subprocess.run(
+        ["sudo", "nft", "-c", "-f", "-"],
+        input=rules,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert checked.returncode == 0, checked.stderr
+    raw = load_destinations(ROOT / "deploy" / "egress-destinations.yaml")
+    assert host_allowed("login.microsoftonline.com", raw, {}) is True
+    assert host_allowed("api.anthropic.com", raw, {}) is False
+    assert host_allowed("api.anthropic.com", raw, {"ANTHROPIC_BAA_ENABLED": "true"}) is True
+    assert host_allowed("example.com", raw, {}) is False
+
+
+def test_retention_secure_delete_vacuum_and_luks(tmp_path):
+    """N-5: integer retention, secure_delete, VACUUM, and the LUKS apply assert."""
+    import sqlite3
+    from datetime import datetime, timezone
+
+    from stack.retention import CHAT_TEXT_TABLES, purge
+
+    source = (ROOT / "stack" / "retention.py").read_text(encoding="utf-8")
+    assert "PRAGMA secure_delete" in source
+    assert "VACUUM" in source
+    assert "typeof({column}) = 'integer'" in source
+    install = (ROOT / "deploy" / "install.sh").read_text(encoding="utf-8")
+    assert "check_luks.py" in install
+    assert "--target /var/lib/local-ai-stack" in install
+    proc = subprocess.run(
+        ["python3", str(ROOT / "scripts" / "check_luks.py"), "--self-check"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert proc.returncode == 0, proc.stderr
+    db = tmp_path / "webui.db"
+    conn = sqlite3.connect(db)
+    conn.execute("CREATE TABLE chat (id TEXT, chat TEXT, updated_at INTEGER)")
+    conn.execute("CREATE TABLE chat_message (id TEXT, content TEXT, updated_at INTEGER)")
+    conn.execute("CREATE TABLE file (id TEXT, data TEXT, created_at INTEGER)")
+    conn.execute("CREATE TABLE feedback (id TEXT, data TEXT, updated_at INTEGER)")
+    conn.execute("CREATE TABLE shared_chat (id TEXT, chat TEXT, updated_at INTEGER)")
+    conn.execute("CREATE TABLE memory (id TEXT, content TEXT, updated_at INTEGER)")
+    conn.execute("CREATE TABLE message (id TEXT, content TEXT, updated_at INTEGER)")
+    conn.execute("CREATE TABLE note (id TEXT, data TEXT, updated_at INTEGER)")
+    old_s = 946684800
+    fresh_s = 4102444800
+    phi = "MRN-SYN-0001234"
+    conn.execute("INSERT INTO chat VALUES ('old', ?, ?)", (phi, old_s))
+    conn.execute("INSERT INTO chat VALUES ('new', 'kept', ?)", (fresh_s,))
+    conn.execute("INSERT INTO chat_message VALUES ('m', ?, ?)", (phi, old_s))
+    conn.execute("INSERT INTO file VALUES ('f', ?, ?)", (phi, old_s))
+    conn.execute("INSERT INTO feedback VALUES ('b', ?, ?)", (phi, old_s))
+    conn.execute("INSERT INTO shared_chat VALUES ('s', ?, ?)", (phi, old_s))
+    conn.execute("INSERT INTO memory VALUES ('mem', ?, ?)", (phi, old_s))
+    conn.execute("INSERT INTO message VALUES ('msg', ?, ?)", (phi, old_s * 1_000_000_000))
+    conn.execute("INSERT INTO note VALUES ('n', ?, ?)", (phi, old_s * 1_000_000_000))
+    conn.commit()
+    conn.close()
+    removed = purge(str(db), 30, now=datetime(2026, 10, 16, tzinfo=timezone.utc))
+    for name, _column, _unit in CHAT_TEXT_TABLES:
+        assert removed[name] >= 1
+    assert phi.encode() not in db.read_bytes()
+
+
+def test_gateway_strips_forwarded_name_and_email(monkeypatch):
+    from http.server import ThreadingHTTPServer
+
+    from stack.pipeline import ChatResult
+    from stack.server import Handler, strip_forwarded_identity
+    from stack.upstream import LiteLLMUpstream
+
+    seen: dict[str, dict[str, str]] = {}
+
+    def fake_handle_chat(**kwargs):
+        seen["headers"] = kwargs["headers"]
+        return ChatResult(200, {"ok": True})
+
+    monkeypatch.setattr("stack.server.handle_chat", fake_handle_chat)
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    server.gateway_client_key = "gateway-test-key"
+    server.deps = (None, None, None, None)
+    server.upstream = object()
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    port = server.server_address[1]
+    try:
+        body = b"{}"
+        conn = http.client.HTTPConnection("127.0.0.1", port, timeout=2)
+        conn.putrequest("POST", "/v1/chat/completions")
+        conn.putheader("Content-Length", str(len(body)))
+        conn.putheader("Authorization", "Bearer gateway-test-key")
+        conn.putheader("X-OpenWebUI-User-Id", "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
+        conn.putheader("X-OpenWebUI-User-Name", "Testy McFakerson")
+        conn.putheader("X-OpenWebUI-User-Email", "testy@example.invalid")
+        conn.putheader("X-Entra-App-Roles", "phi")
+        conn.endheaders()
+        conn.send(body)
+        response = conn.getresponse()
+        assert response.status == 200
+        response.read()
+    finally:
+        server.shutdown()
+        server.server_close()
+    names = {key.lower() for key in seen["headers"]}
+    assert "x-openwebui-user-name" not in names
+    assert "x-openwebui-user-email" not in names
+    assert "x-openwebui-user-id" in names
+    assert "x-entra-app-roles" in names
+    stripped = strip_forwarded_identity(
+        {"X-OpenWebUI-User-Name": "Testy McFakerson", "X-OpenWebUI-User-Id": "id"}
+    )
+    assert "X-OpenWebUI-User-Name" not in stripped
+
+    from http.server import BaseHTTPRequestHandler
+
+    recorded: dict[str, str] = {}
+
+    class Rec(BaseHTTPRequestHandler):
+        def do_POST(self):  # noqa: N802
+            recorded.update({key.lower(): value for key, value in self.headers.items()})
+            payload = b'{"id":"x","choices":[]}'
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+
+        def log_message(self, fmt: str, *args) -> None:
+            return
+
+    upstream_server = ThreadingHTTPServer(("127.0.0.1", 0), Rec)
+    upstream_thread = threading.Thread(target=upstream_server.serve_forever, daemon=True)
+    upstream_thread.start()
+    uport = upstream_server.server_address[1]
+    try:
+        upstream = LiteLLMUpstream(f"http://127.0.0.1:{uport}", "virtual-key-fixture")
+        upstream.complete(
+            {"model": "foundry-gpt", "messages": [{"role": "user", "content": "synthetic"}]},
+            team_id="phi",
+        )
+    finally:
+        upstream_server.shutdown()
+        upstream_server.server_close()
+    assert "x-openwebui-user-name" not in recorded
+    assert "x-openwebui-user-email" not in recorded
+    assert recorded.get("x-litellm-team-id") == "phi"
+
+
+def test_least_privilege_is_not_claimed_tested_here():
+    """PR #3's test_best_practices.py is not in this tree. Do not mark those practices tested."""
+    path = ROOT / "tests" / "test_best_practices.py"
+    if not path.exists():
+        return
+    text = path.read_text(encoding="utf-8")
+    for practice in ("ms.azure-mcp-least-privilege", "payload.least-privilege"):
+        assert practice not in text or "tested" not in text.split(practice, 1)[1][:80]

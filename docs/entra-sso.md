@@ -10,15 +10,15 @@ Zitadel is an unused fallback and is not configured on this stack.
 2. Supported accounts: this tenant only.
 3. API permissions: `openid`, `email`, `profile`. Admin consent. Optional claim: `roles` in the ID token.
 4. App roles, value and display name the same: `phi`, `non-phi`, `admin`. Assign `phi` or `non-phi` for model access. Assign `admin` only to the operators who administer Open WebUI. `admin` alone does not grant a model team.
-5. Enterprise application: **User assignment required** is Yes. Assign one security group, `local-ai-users`. Do not assign the whole tenant. People get an account by being added to that group and given an app role. They cannot self-provision.
+5. Enterprise application: **Assignment required = Yes**. Scope that assignment to one security group, `PHI-users`. Do not assign the whole tenant. People get an account by being added to that group and given an app role. They cannot self-provision.
 6. Create a client secret in the vault. `deploy/install.sh` writes it to `/etc/open-webui/microsoft_client_secret` from `MICROSOFT_CLIENT_SECRET` (mode 0600). Do not put it in a unit file or in git.
-7. Set `MICROSOFT_CLIENT_ID` in `/etc/open-webui/config.env`. The committed file keeps a placeholder client id. `OPENID_PROVIDER_URL` is `https://login.microsoftonline.com/f7812296-5bce-41dc-8102-b1b270e7c4c7/v2.0/.well-known/openid-configuration`.
+7. Set `MICROSOFT_CLIENT_ID` and `MICROSOFT_CLIENT_TENANT_ID` in `/etc/open-webui/config.env`. Do not set `AZURE_TENANT_ID` on Open WebUI. That name is LiteLLM Foundry only (`deploy/env/litellm.env`) and must be the same tenant. The committed Open WebUI file keeps a placeholder client id and the real tenant id. `OPENID_PROVIDER_URL` is `https://login.microsoftonline.com/f7812296-5bce-41dc-8102-b1b270e7c4c7/v2.0/.well-known/openid-configuration`.
 
 Conditional Access: require MFA for the app. Admins who can change the stack (the `localai` host group, LiteLLM master key holders, and the Entra `admin` app role) use a phishing-resistant method. Sign-in frequency 8 hours, matching `JWT_EXPIRES_IN=8h`.
 
 ## Open WebUI access
 
-Local signup is off (`ENABLE_SIGNUP=false`). The password form is off (`ENABLE_LOGIN_FORM=false`). OAuth account creation stays on so a person Entra has already accepted can get a row, and Open WebUI refuses every login whose `roles` claim is outside `phi`, `non-phi`, and `admin`.
+Local signup only is off (`ENABLE_SIGNUP=false`). That sentence is not “all signup is off”: OAuth signup stays on (`ENABLE_OAUTH_SIGNUP=true`) so a person already in the `PHI-users` group can get a row. The password form is off (`ENABLE_LOGIN_FORM=false`, `ENABLE_PASSWORD_AUTH=false`). Open WebUI refuses every login whose `roles` claim is outside `phi`, `non-phi`, and `admin` (`ENABLE_OAUTH_ROLE_MANAGEMENT=true`, `OAUTH_ALLOWED_ROLES`). Group management copies that same claim (`ENABLE_OAUTH_GROUP_MANAGEMENT=true`, `OAUTH_GROUPS_CLAIM=roles`).
 
 `DEFAULT_USER_ROLE=pending`. Role management overwrites that only when the claim matches. A pending account cannot chat.
 
@@ -40,12 +40,9 @@ The Open WebUI JWT expires after 8 hours. VPN access for PHI users should use th
 
 ## Emergency access
 
-When Entra is down, do not point users at a public fallback and do not paste PHI into a tool that has no BAA.
+When Entra is down, do not point users at a public fallback and do not paste PHI into a tool that has no BAA. Do not turn `ENABLE_LOGIN_FORM` back on.
 
-1. Two people retrieve the break-glass secret from the vault.
-2. Store it in a root-owned mode `0600` file. Run `BREAK_GLASS_SECRET_FILE=/path deploy/break-glass-enable.sh` with no arguments.
-3. Record the actor in the audit log (`config_change` / break-glass). The script refuses passwords on the command line.
-4. Restore Entra, disable the break-glass credential, and rotate it.
+`deploy/break-glass-enable.sh` is not an emergency login. It refuses a secret on the command line, checks that `BREAK_GLASS_SECRET_FILE` is mode `0600`, and exits 1. It does not read the secret into the log, does not change Open WebUI, and does not enable the password form. If `BREAK_GLASS_AUDIT_LOG` is set, it appends one line that names the event and omits the secret. Restoring access means restoring Entra.
 
 There is no shared daily admin password in the repo.
 

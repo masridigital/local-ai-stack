@@ -433,7 +433,7 @@ def test_10_and_11_allowlist(policy, presidio_services, audit):
     assert policy.streaming_enabled is False
     assert policy.foundry.azure_ai_enabled is False
     assert policy.foundry.abuse_monitoring_opt_out is False
-    assert policy.anthropic_zdr_confirmed_by_cap is True
+    assert policy.anthropic_zdr_confirmed_by_cap is False
 
 
 def test_foundry_region_and_family(policy, presidio_services, audit):
@@ -613,6 +613,19 @@ def test_break_glass_refuses_argv(tmp_path):
     assert denied.returncode == 2
     missing = subprocess.run([str(script)], check=False, capture_output=True, text=True, env={**os.environ, "BREAK_GLASS_SECRET_FILE": ""})
     assert missing.returncode == 2
+    secret = tmp_path / "glass"
+    secret.write_text("not-a-login-password", encoding="utf-8")
+    secret.chmod(0o600)
+    audit = tmp_path / "audit.log"
+    env = {**os.environ, "BREAK_GLASS_SECRET_FILE": str(secret), "BREAK_GLASS_AUDIT_LOG": str(audit)}
+    closed = subprocess.run([str(script)], check=False, capture_output=True, text=True, env=env)
+    assert closed.returncode == 1
+    assert "does not enable login" in closed.stderr
+    assert "not-a-login-password" not in closed.stdout
+    assert "not-a-login-password" not in closed.stderr
+    line = audit.read_text(encoding="utf-8")
+    assert "password login was not enabled" in line
+    assert "not-a-login-password" not in line
 
 
 def test_install_check_twice():

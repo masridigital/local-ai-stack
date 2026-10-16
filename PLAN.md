@@ -81,12 +81,12 @@ No deploy from this PR, no real credentials, no public exposure, no real data. C
 - `ANTHROPIC_API_KEY` from `/etc/litellm/anthropic_api_key` (mode 0600, `LoadCredential`).
 - Allowed models are listed in `litellm/policy.yaml`. Anything else is rejected.
 - Allowed parameters: `model`, `messages`, `max_tokens`, `temperature`, `top_p`, `stop`, `user`. `stream: true` is rejected.
-- ZDR is in the BAA. Cap attested that in chat on 2026-10-15 ("BAA has ZDR"). `anthropic_zdr_confirmed_by_cap` stays true. Formal document verification is still pending at Cap's review. The runtime switch stays off until the deploy checklist confirms the live key and org.
+- Zero data retention is not confirmed in this tree. `anthropic_zdr_confirmed_by_cap` is false until Cap signs the BAA/ZDR checklist. The runtime switch stays off until that checklist also confirms the live key and org.
 
 ## 7. Foundry
 
 - Provider `azure/` only, until `ALLOW_AZURE_AI_THIRD_PARTY` is explicitly set. It defaults false.
-- Auth: Entra (`AZURE_TENANT_ID`, `AZURE_CLIENT_ID`, and `AZURE_CLIENT_SECRET` in `/etc/litellm/azure_client_secret`). No key in the repo.
+- Auth: Entra. LiteLLM Foundry reads `AZURE_TENANT_ID`, `AZURE_CLIENT_ID`, and `AZURE_CLIENT_SECRET` in `/etc/litellm/azure_client_secret`. Open WebUI reads `MICROSOFT_CLIENT_TENANT_ID` for that same tenant. No key in the repo.
 - Region from `AZURE_OPENAI_REGION` must be in the US list. API base must be `*.openai.azure.com` and must not name a non-US region.
 - Model family from `AZURE_OPENAI_MODEL_FAMILY` must be `gpt-4.1`, `gpt-4.1-mini`, `gpt-4.1-nano`, `gpt-4o`, or `gpt-4o-mini`.
 - Deployment name is `AZURE_OPENAI_DEPLOYMENT` (placeholder).

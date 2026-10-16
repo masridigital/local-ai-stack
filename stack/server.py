@@ -19,6 +19,22 @@ from stack.upstream import LiteLLMUpstream
 ROOT = Path(os.environ.get("STACK_ROOT", "/app"))
 MAX_CONTENT_LENGTH = 1_048_576
 IPV6_WILDCARD = frozenset({"::", "::0"})
+# Open WebUI forwards these when ENABLE_FORWARD_USER_INFO_HEADERS=true.
+# They must not reach LiteLLM.
+FORWARDED_IDENTITY_HEADERS = frozenset(
+    {
+        "x-openwebui-user-name",
+        "x-openwebui-user-email",
+    }
+)
+
+
+def strip_forwarded_identity(headers: dict[str, str]) -> dict[str, str]:
+    return {
+        key: value
+        for key, value in headers.items()
+        if key.lower() not in FORWARDED_IDENTITY_HEADERS
+    }
 
 
 def checked_content_length(raw: str | None) -> int:
@@ -105,7 +121,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         policy, foundry, presidio, audit = self.server.deps  # type: ignore[attr-defined]
         user_id = self.headers.get("X-OpenWebUI-User-Id")
-        headers = {key: value for key, value in self.headers.items()}
+        headers = strip_forwarded_identity({key: value for key, value in self.headers.items()})
         try:
             result = handle_chat(
                 path=self.path.split("?", 1)[0],

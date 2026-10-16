@@ -9,6 +9,9 @@ import urllib.request
 from stack.errors import PolicyError
 
 
+_DROPPED_IDENTITY = frozenset({"x-openwebui-user-name", "x-openwebui-user-email"})
+
+
 class LiteLLMUpstream:
     def __init__(self, base_url: str, api_key: str, timeout: float = 60.0):
         self.base_url = base_url.rstrip("/")
@@ -28,6 +31,9 @@ class LiteLLMUpstream:
         }
         if team_id:
             headers["x-litellm-team-id"] = team_id
+        for name in list(headers):
+            if name.lower() in _DROPPED_IDENTITY:
+                del headers[name]
         request = urllib.request.Request(
             f"{self.base_url}/v1/chat/completions",
             data=data,
