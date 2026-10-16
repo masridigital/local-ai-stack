@@ -517,6 +517,9 @@ def test_egress_default_deny():
         listed.update(item.get("hosts") or [])
     assert set(hosts) <= listed
     assert "region1.v2.argotunnel.com" not in hosts
+    assert "pkg.cloudflare.com" not in hosts
+    assert "time.cloudflare.com" not in rules
+    assert "0.pool.ntp.org" in hosts
     assert "api.anthropic.com" not in hosts
     assert "pypi.org" not in hosts
     assert "huggingface.co" not in hosts
@@ -530,6 +533,11 @@ def test_egress_default_deny():
     assert "pypi.org" in install_rules
     owner = render_owner_rules(raw, {"api.anthropic.com": ["192.0.2.10"]}, {"ANTHROPIC_BAA_ENABLED": "true"})
     assert "--uid-owner egress-proxy" in owner
+    assert "--uid-owner egress-proxy -p tcp --dport 80 -j ACCEPT" in owner
+    assert "--uid-owner root -p tcp --dport 443 -j ACCEPT" not in owner
+    assert "--uid-owner _apt -p tcp --dport 443 -j ACCEPT" not in owner
+    assert "--dport 8890" in owner
+    assert "--sport 68 --dport 67" in owner
     assert "--uid-owner litellm -j REJECT" in owner
     assert "192.0.2.10" not in owner
     assert "127.0.0.2" in owner
@@ -539,6 +547,7 @@ def test_egress_default_deny():
     assert "policy-gateway -j REJECT" in opened
     assert "mcp.example" in opened
     assert "--uid-owner policy-gateway -d" not in opened
+    assert "--uid-owner policy-gateway -p tcp --dport 443 -j ACCEPT" not in opened
 
 
 def test_gateway_forwards_litellm_names_and_masks_fields(policy, presidio_services, audit):

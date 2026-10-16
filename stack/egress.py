@@ -9,13 +9,12 @@ import yaml
 
 # Served by the runtime forward proxy. Everything else stays off that proxy.
 RUNTIME_PROXY_USERS = ("openwebui", "litellm")
-# Apt, package hosts, SIEM, and MCP are direct skuid rules, not proxy destinations.
+# Apt package hosts use the apt listener. SIEM, DNS, NTP, and MCP stay off the runtime ports.
 RUNTIME_PROXY_EXCLUDED = frozenset(
     {
         "ubuntu-updates",
         "pypi",
         "caddy-apt",
-        "cloudflared-apt",
         "spacy-model",
         "embedding-model",
         "ntp",
@@ -23,9 +22,11 @@ RUNTIME_PROXY_EXCLUDED = frozenset(
         "siem",
         "stackjack",
         "composio",
-        "cloudflared",
     }
 )
+# Hostnames the apt listener may dial, and only on the ports each row lists.
+APT_DESTINATIONS = frozenset({"ubuntu-updates", "pypi", "caddy-apt", "spacy-model", "embedding-model"})
+MCP_DESTINATIONS = frozenset({"stackjack", "composio"})
 AZURE_SUFFIX = ".openai.azure.com"
 
 
@@ -108,6 +109,35 @@ def host_allowed(host: str, raw: dict, env: dict[str, str], user: str | None = N
         if not destination_active(item, env):
             continue
         if user is not None and user not in item.get("users", []):
+            continue
+        if _row_matches(host, item, env):
+            return True
+    return False
+
+
+def destination_ports(item: dict) -> set[int]:
+    if "ports" in item:
+        return {int(port) for port in item["ports"]}
+    if item.get("port") is not None:
+        return {int(item["port"])}
+    return set()
+
+
+def host_on_named_destination(
+    host: str,
+    port: int,
+    raw: dict,
+    env: dict[str, str],
+    names: frozenset[str],
+) -> bool:
+    """Active named row whose port list includes this port."""
+    host = host.lower().rstrip(".")
+    for item in raw["destinations"]:
+        if item.get("name") not in names:
+            continue
+        if not destination_active(item, env):
+            continue
+        if port not in destination_ports(item):
             continue
         if _row_matches(host, item, env):
             return True

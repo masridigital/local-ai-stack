@@ -110,7 +110,8 @@ def render_owner_rules(raw: dict, resolutions: dict[str, list[str]], env: dict[s
     active = active_destinations(raw, env)
     lines = [
         "# Owner-matched OUTPUT rules. Proxy ports are uid-locked before loopback accept.",
-        "# DNS, NTP, apt, optional SIEM, and optional MCP are narrow uid accepts.",
+        "# Apt and MCP names are checked on their own proxy ports. DNS, NTP, and optional SIEM stay uid accepts.",
+        "# DHCPv4 renew is sport 68 to dport 67. IPv6 ND and DHCPv6 are in owner6.rules.",
         "# Hostnames are comments here. They are not firewall matches.",
     ]
     for item in active:
@@ -125,19 +126,21 @@ def render_owner_rules(raw: dict, resolutions: dict[str, list[str]], env: dict[s
     lines.append(
         "-A ufw-before-output -d 127.0.0.1 -p tcp --dport 8889 -m owner ! --uid-owner litellm -j REJECT"
     )
+    lines.append("-A ufw-before-output -d 127.0.0.1 -p tcp --dport 8890 -m owner --uid-owner root -j ACCEPT")
+    lines.append("-A ufw-before-output -d 127.0.0.1 -p tcp --dport 8890 -m owner --uid-owner _apt -j ACCEPT")
+    lines.append("-A ufw-before-output -d 127.0.0.1 -p tcp --dport 8890 -j REJECT")
+    lines.append(
+        "-A ufw-before-output -d 127.0.0.1 -p tcp --dport 8891 -m owner ! --uid-owner policy-gateway -j REJECT"
+    )
     lines.append("-A ufw-before-output -o lo -j ACCEPT")
+    lines.append(f"-A ufw-before-output -m owner --uid-owner {PROXY_USER} -p tcp --dport 80 -j ACCEPT")
     lines.append(f"-A ufw-before-output -m owner --uid-owner {PROXY_USER} -p tcp --dport 443 -j ACCEPT")
     lines.append(f"-A ufw-before-output -m owner --uid-owner {PROXY_USER} -p udp --dport 53 -j ACCEPT")
     lines.append(f"-A ufw-before-output -m owner --uid-owner {PROXY_USER} -p tcp --dport 53 -j ACCEPT")
     lines.append("-A ufw-before-output -m owner --uid-owner systemd-resolve -p udp --dport 53 -j ACCEPT")
     lines.append("-A ufw-before-output -m owner --uid-owner systemd-resolve -p tcp --dport 53 -j ACCEPT")
     lines.append("-A ufw-before-output -m owner --uid-owner systemd-timesync -p udp --dport 123 -j ACCEPT")
-    lines.append("-A ufw-before-output -m owner --uid-owner _apt -p tcp --dport 80 -j ACCEPT")
-    lines.append("-A ufw-before-output -m owner --uid-owner _apt -p tcp --dport 443 -j ACCEPT")
-    lines.append("-A ufw-before-output -m owner --uid-owner root -p tcp --dport 80 -j ACCEPT")
-    lines.append("-A ufw-before-output -m owner --uid-owner root -p tcp --dport 443 -j ACCEPT")
-    if env.get("STACKJACK_MCP_HOST", "").strip() or env.get("COMPOSIO_MCP_HOST", "").strip():
-        lines.append("-A ufw-before-output -m owner --uid-owner policy-gateway -p tcp --dport 443 -j ACCEPT")
+    lines.append("-A ufw-before-output -p udp --sport 68 --dport 67 -j ACCEPT")
     siem_port = env.get("SIEM_PORT", "").strip()
     if env.get("SIEM_HOST", "").strip() and siem_port.isdigit() and siem_port not in {"80", "443"}:
         lines.append(f"-A ufw-before-output -m owner --uid-owner root -p tcp --dport {int(siem_port)} -j ACCEPT")
@@ -146,6 +149,19 @@ def render_owner_rules(raw: dict, resolutions: dict[str, list[str]], env: dict[s
     if resolutions:
         # Resolved addresses are not installed. The proxy dials the name itself.
         lines.append("# resolved addresses are ignored")
+    return "\n".join(lines) + "\n"
+
+
+def render_nd_rules() -> str:
+    """IPv6 rules spliced into before6.rules. Names are the iptables icmpv6 types."""
+    lines = [
+        "# DHCPv6 renew and IPv6 neighbor discovery. Spliced into before6.rules.",
+        "-A ufw6-before-output -p udp --sport 546 --dport 547 -j ACCEPT",
+        "-A ufw6-before-output -p ipv6-icmp --icmpv6-type router-solicitation -j ACCEPT",
+        "-A ufw6-before-output -p ipv6-icmp --icmpv6-type router-advertisement -j ACCEPT",
+        "-A ufw6-before-output -p ipv6-icmp --icmpv6-type neighbour-solicitation -j ACCEPT",
+        "-A ufw6-before-output -p ipv6-icmp --icmpv6-type neighbour-advertisement -j ACCEPT",
+    ]
     return "\n".join(lines) + "\n"
 
 
@@ -163,14 +179,18 @@ def resolve_hosts(raw: dict, env: dict[str, str] | None = None) -> dict[str, lis
     return found
 
 
-def splice_before_rules(before_text: str, block: str) -> str:
+def splice_before_rules(
+    before_text: str,
+    block: str,
+    marker: str = "-A ufw-before-output -o lo -j ACCEPT",
+    begin: str = "# BEGIN local-ai-owner",
+    end: str = "# END local-ai-owner",
+) -> str:
     """Insert owner rules before UFW's loopback OUTPUT accept.
 
     Ubuntu's before.rules accepts every loopback packet before the established
     rule. A REJECT spliced after that accept never sees 127.0.0.1 or 127.0.0.2.
     """
-    begin = "# BEGIN local-ai-owner"
-    end = "# END local-ai-owner"
     if begin in before_text and end in before_text:
         start = before_text.index(begin)
         finish = before_text.index(end) + len(end)
@@ -178,7 +198,6 @@ def splice_before_rules(before_text: str, block: str) -> str:
             finish += 1
         before_text = before_text[:start] + before_text[finish:]
     payload = f"{begin}\n{block.rstrip()}\n{end}\n"
-    marker = "-A ufw-before-output -o lo -j ACCEPT"
     if marker not in before_text:
         raise ValueError("ufw before.rules has no loopback OUTPUT accept to anchor on")
     insert_at = before_text.index(marker)
@@ -190,6 +209,7 @@ def main() -> None:
     parser.add_argument("--dest", type=Path, required=True)
     parser.add_argument("--user-rules", type=Path)
     parser.add_argument("--owner-rules", type=Path)
+    parser.add_argument("--nd-rules", type=Path)
     parser.add_argument("--apply-ufw", action="store_true")
     args = parser.parse_args()
     raw = load_destinations(args.dest)
@@ -198,10 +218,22 @@ def main() -> None:
         args.user_rules.write_text(render_user_rules(raw), encoding="utf-8")
     if args.owner_rules:
         args.owner_rules.write_text(render_owner_rules(raw, {}), encoding="utf-8")
+    if args.nd_rules:
+        args.nd_rules.write_text(render_nd_rules(), encoding="utf-8")
     if args.apply_ufw:
         block = render_owner_rules(raw, {}, env)
         before = Path("/etc/ufw/before.rules")
         before.write_text(splice_before_rules(before.read_text(encoding="utf-8"), block), encoding="utf-8")
+        before6 = Path("/etc/ufw/before6.rules")
+        if before6.is_file():
+            nd = splice_before_rules(
+                before6.read_text(encoding="utf-8"),
+                render_nd_rules(),
+                marker="-A ufw6-before-output -o lo -j ACCEPT",
+                begin="# BEGIN local-ai-nd",
+                end="# END local-ai-nd",
+            )
+            before6.write_text(nd, encoding="utf-8")
 
 
 if __name__ == "__main__":

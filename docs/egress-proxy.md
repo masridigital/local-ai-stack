@@ -1,31 +1,38 @@
 # Egress hostnames
 
-Off-host names are checked by a local forward proxy. nftables decides which uid may open which path. The proxy does not carry apt, Cloudsmith, `pkg.cloudflare.com`, SIEM, StackJack, or Composio.
+Off-host names are checked by a local forward proxy. nftables decides which uid may open which path. Open WebUI and LiteLLM do not share a port with apt or MCP.
 
 ## Ports
 
 `egress-proxy.service` listens on loopback only:
 
-| Port | UID nftables allows onto that port | Names the proxy will CONNECT |
+| Port | UID nftables allows onto that port | What the proxy allows |
 |---|---|---|
-| `127.0.0.1:8888` | `openwebui` | `login.microsoftonline.com`, `login.microsoft.com` |
-| `127.0.0.1:8889` | `litellm` | `api.anthropic.com` only when `ANTHROPIC_BAA_ENABLED=true`; `AZURE_API_HOST` when that name is a single label ending in `.openai.azure.com` and one hyphen-separated token is a US region in `litellm/policy.yaml` |
+| `127.0.0.1:8888` | `openwebui` | CONNECT to `login.microsoftonline.com` and `login.microsoft.com` |
+| `127.0.0.1:8889` | `litellm` | CONNECT to `api.anthropic.com` only when `ANTHROPIC_BAA_ENABLED=true`; `AZURE_API_HOST` when that name is a single label ending in `.openai.azure.com` and one hyphen-separated token is a US region in `litellm/policy.yaml` |
+| `127.0.0.1:8890` | `root` and `_apt` | Ubuntu archive and security hosts on 80 and 443, `dl.cloudsmith.io` on 443, and PyPI, GitHub, and Hugging Face only while `INSTALL_EGRESS=1` |
+| `127.0.0.1:8891` | `policy-gateway` | CONNECT to `STACKJACK_MCP_HOST` and `COMPOSIO_MCP_HOST` when those names are set |
 
-The Presidio analyzer has no off-host destination, so it has no proxy port and no `https_proxy`.
+The Presidio analyzer has no off-host destination, so it has no proxy port and no `https_proxy`. `policy-gateway.service` sets `HTTPS_PROXY` to `127.0.0.1:8891` and `NO_PROXY` for loopback. systemd still denies every other address for that unit, so the process cannot dial an MCP host itself.
 
-CONNECT to port 443 is the only accepted method. The proxy resolves the name and dials the first address that is not loopback, link-local, RFC1918, CGNAT (`100.64.0.0/10`), or IPv6 ULA. Any other answer is refused.
+Ports 8888, 8889, and 8891 accept CONNECT to port 443 only. The CONNECT hostname is the name the client uses as SNI. A Host header, when the client sends one, must be that same name. Port 80 has no SNI. On 8890 it is absolute-form `GET` or `HEAD` (`http://archive.ubuntu.com/...`) and the Host header is required and must match. `pkg.cloudflare.com` is not a destination.
+
+The proxy resolves the name and dials the first address for which `ip.is_global` is true, after unwrapping an IPv4-mapped address. Multicast is refused. That drops loopback, link-local, RFC1918, CGNAT (`100.64.0.0/10`), IPv6 ULA, and documentation ranges.
 
 ## Other uids
 
 The same nftables table also accepts:
 
-- `systemd-resolve` and `egress-proxy`: UDP/TCP 53
-- `systemd-timesync`: UDP 123
-- `_apt` and `root`: TCP 80 and TCP 443, for apt and unattended-upgrades
+- `egress-proxy`: TCP 80 and TCP 443, plus UDP/TCP 53, after the name check above
+- `systemd-resolve`: UDP/TCP 53
+- `systemd-timesync`: UDP 123. The client is `systemd-timesyncd` with `NTP=0.pool.ntp.org 1.pool.ntp.org 2.pool.ntp.org` from `deploy/systemd/timesyncd.conf.d/local-ai.conf`. UDP has no SNI. This is not `time.cloudflare.com`.
 - `root`: the `SIEM_PORT` when `SIEM_HOST` is set and the port is not 80 or 443
-- `policy-gateway`: TCP 443 only when `STACKJACK_MCP_HOST` or `COMPOSIO_MCP_HOST` is set
+- DHCP renew and IPv6 neighbor discovery, with no uid match, so a dynamic address keeps working:
+  - `udp sport 68 udp dport 67 accept` (DHCPv4)
+  - `udp sport 546 udp dport 547 accept` (DHCPv6)
+  - `icmpv6 type { nd-router-solicit, nd-router-advert, nd-neighbor-solicit, nd-neighbor-advert } accept`
 
-Those rows are not in the proxy allowlist.
+`root` and `_apt` have no blanket TCP 80 or TCP 443 accept. `policy-gateway` has no blanket TCP 443 accept. Apt on a later boot uses `/etc/apt/apt.conf.d/99local-ai-proxy`, which points at `127.0.0.1:8890`. `install.sh` writes that file after the proxy is up. The first apply still fetches packages before the filter is loaded.
 
 ## Verify on the VM
 
@@ -33,10 +40,10 @@ After `deploy/install.sh --apply`:
 
 ```bash
 nft list table inet local_ai_egress
-ss -ltnp | awk '/127.0.0.1:8888|127.0.0.1:8889/'
+ss -ltnp | awk '/127.0.0.1:8888|127.0.0.1:8889|127.0.0.1:8890|127.0.0.1:8891/'
 ```
 
-The table should show the `8888` reject for every uid except `openwebui`, the `8889` reject for every uid except `litellm`, both of those before `oifname "lo" accept`, and the skuid accepts above.
+The table should show the `8888` reject for every uid except `openwebui`, the `8889` reject for every uid except `litellm`, the `8890` accepts for `root` and `_apt` followed by a reject, and the `8891` reject for every uid except `policy-gateway`. Those rules are before `oifname "lo" accept`. It should also show `udp sport 68 udp dport 67 accept`, `udp sport 546 udp dport 547 accept`, and `nd-neighbor-solicit`. It should not show a blanket `meta skuid root tcp dport { 80, 443 }` or `meta skuid policy-gateway tcp dport 443`.
 
 ```bash
 sudo -u openwebui curl -sv --max-time 5 --proxy http://127.0.0.1:8888 https://api.anthropic.com/
@@ -45,5 +52,41 @@ sudo -u litellm curl -sv --max-time 5 --proxy http://127.0.0.1:8889 https://logi
 ```
 
 The first two fail (proxy 403, then an nftables reject because Open WebUI cannot open 8889). The third fails with proxy 403. A CONNECT from `openwebui` to `https://login.microsoftonline.com/` through port 8888 is the one that the proxy accepts.
+
+### Reboot
+
+`local-ai-egress-nft.service` is enabled and loads the table before the network is configured (`Before=network-pre.target`). `local-ai-egress-refresh.timer` loads it again about two minutes after boot and every five minutes. A static address is not required: the DHCP and neighbor-discovery accepts above are in that table.
+
+```bash
+systemctl is-enabled local-ai-egress-nft.service
+systemctl is-enabled local-ai-egress-refresh.timer
+```
+
+Reboot, then as soon as SSH answers, without waiting two minutes:
+
+```bash
+nft list table inet local_ai_egress
+```
+
+The table is present, including `udp sport 68 udp dport 67 accept` and `nd-neighbor-solicit`.
+
+### DHCP and neighbor discovery
+
+```bash
+nft list table inet local_ai_egress | grep -F 'udp sport 68 udp dport 67 accept'
+nft list table inet local_ai_egress | grep -F 'udp sport 546 udp dport 547 accept'
+nft list table inet local_ai_egress | grep -F 'nd-neighbor-solicit'
+```
+
+Each command prints one rule. UFW's IPv4 owner block also accepts UDP sport 68 to dport 67. The IPv6 lines are spliced into `before6.rules` from `deploy/ufw/owner6.rules`.
+
+### Non-owner uid
+
+`nobody` is not an owner of any accept. Both commands must fail. The first is dropped by the chain policy. The second is rejected because 8890 allows only `root` and `_apt`, and that reject is before the loopback accept.
+
+```bash
+sudo -u nobody curl -sv --max-time 5 https://archive.ubuntu.com/ || echo "non-owner dropped"
+sudo -u nobody curl -sv --max-time 5 --proxy http://127.0.0.1:8890 https://archive.ubuntu.com/ || echo "non-owner dropped"
+```
 
 `python3 scripts/egress_nft.py` prints the rules the apply step loads. Compare that text with `nft list table inet local_ai_egress`.

@@ -12,7 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from scripts.egress_owners import load_destinations, render_owner_rules, render_user_rules
+from scripts.egress_owners import load_destinations, render_nd_rules, render_owner_rules, render_user_rules
 
 WILDCARD_HOST = ".".join(("0", "0", "0", "0"))
 FORBIDDEN_TUNNEL_TARGETS = ("open-webui", "litellm", "policy-gateway", "presidio", "postgres")
@@ -108,6 +108,9 @@ def check() -> list[str]:
         errors.append("ufw user.rules drifted from egress-destinations.yaml")
     if owner_rules != render_owner_rules(raw, {}):
         errors.append("ufw owner.rules drifted from egress-destinations.yaml")
+    nd_rules = (ROOT / "deploy" / "ufw" / "owner6.rules").read_text(encoding="utf-8")
+    if nd_rules != render_nd_rules():
+        errors.append("ufw owner6.rules drifted from the IPv6 ND renderer")
     if "default deny incoming" not in user_rules or "default deny outgoing" not in user_rules:
         errors.append("ufw rules are not default deny")
     if WILDCARD_HOST in user_rules or "argotunnel" in user_rules or "docker.io" in user_rules:

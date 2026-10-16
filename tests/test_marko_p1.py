@@ -354,7 +354,9 @@ def test_anthropic_dropin_follows_the_switch(tmp_path):
     stop = install.index("systemctl stop litellm.service")
     delete = install.index("rm -f /etc/litellm/anthropic_api_key")
     dropin = install.index("litellm-baa-dropin.sh")
-    reload = install.index("systemctl daemon-reload")
+    # The earlier daemon-reload only restarts the proxy for a re-apply.
+    assert install.index("systemctl daemon-reload") < stop
+    reload = install.rindex("systemctl daemon-reload")
     start = install.index("systemctl start litellm.service")
     health = install.index("http://127.0.0.2:4000/health/liveliness")
     scope = install.index("scope_virtual_key.py")
@@ -396,7 +398,14 @@ def test_user_groups_header_stays_comma_separated():
     design = (ROOT / "docs" / "egress-proxy.md").read_text(encoding="utf-8")
     assert "127.0.0.1:8888" in design
     assert "127.0.0.1:8889" in design
+    assert "127.0.0.1:8890" in design
+    assert "127.0.0.1:8891" in design
     assert "Verify on the VM" in design
+    assert "Reboot" in design
+    assert "udp sport 68 udp dport 67 accept" in design
+    assert "nd-neighbor-solicit" in design
+    assert "nobody" in design
+    assert "0.pool.ntp.org" in design
 
 
 def test_litellm_port_4000_is_gated():
@@ -473,17 +482,24 @@ def test_nft_rejects_litellm_before_loopback_accept():
     assert rules.index("ip daddr 127.0.0.1 tcp dport 4000 reject") < loopback
     assert rules.index("tcp dport 8888 meta skuid != openwebui reject") < loopback
     assert rules.index("tcp dport 8889 meta skuid != litellm reject") < loopback
-    assert "meta skuid egress-proxy tcp dport 443 accept" in rules
+    assert "meta skuid egress-proxy tcp dport { 80, 443 } accept" in rules
     assert "meta skuid systemd-resolve meta l4proto { tcp, udp } th dport 53 accept" in rules
     assert "meta skuid systemd-timesync udp dport 123 accept" in rules
-    assert "meta skuid _apt tcp dport { 80, 443 } accept" in rules
-    assert "meta skuid root tcp dport { 80, 443 } accept" in rules
-    assert "policy-gateway" not in rules
+    assert "udp sport 68 udp dport 67 accept" in rules
+    assert "udp sport 546 udp dport 547 accept" in rules
+    assert "nd-neighbor-solicit" in rules
+    assert rules.index("tcp dport 8890 meta skuid root accept") < loopback
+    assert rules.index("tcp dport 8890 meta skuid _apt accept") < loopback
+    assert rules.index("tcp dport 8890 reject") < loopback
+    assert rules.index("tcp dport 8891 meta skuid != policy-gateway reject") < loopback
+    assert "meta skuid _apt tcp dport { 80, 443 } accept" not in rules
+    assert "meta skuid root tcp dport { 80, 443 } accept" not in rules
+    assert "meta skuid policy-gateway tcp dport 443 accept" not in rules
     mcp = render_nft({"STACKJACK_MCP_HOST": "mcp.example"})
-    assert "meta skuid policy-gateway tcp dport 443 accept" in mcp
+    assert "meta skuid policy-gateway tcp dport 443 accept" not in mcp
     siem = render_nft({"SIEM_HOST": "siem.example", "SIEM_PORT": "6514"})
     assert "meta skuid root tcp dport 6514 accept" in siem
-    for user in ("egress-proxy", "openwebui", "litellm", "systemd-resolve", "systemd-timesync", "policy-gateway"):
+    for user in ("egress-proxy", "openwebui", "litellm", "systemd-resolve", "systemd-timesync", "policy-gateway", "_apt"):
         subprocess.run(
             ["sudo", "useradd", "--system", "--shell", "/usr/sbin/nologin", user],
             check=False,
@@ -643,11 +659,30 @@ def test_gateway_strips_forwarded_name_and_email(monkeypatch):
 def test_proxy_allowlist_is_per_service():
     import socket
 
-    from stack.egress import azure_host_ok, load_destinations, proxy_host_allowed
-    from stack.egress_proxy import RUNTIME_LISTENERS, EgressProxy, bind_address, connect_allowed, forbidden_ip
+    from stack.egress import (
+        APT_DESTINATIONS,
+        MCP_DESTINATIONS,
+        azure_host_ok,
+        host_on_named_destination,
+        load_destinations,
+        proxy_host_allowed,
+    )
+    from stack.egress_proxy import (
+        PROXY_LISTENERS,
+        RUNTIME_LISTENERS,
+        EgressProxy,
+        bind_address,
+        connect_allowed,
+        forbidden_ip,
+    )
 
     raw = load_destinations(ROOT / "deploy" / "egress-destinations.yaml")
-    env = {"ANTHROPIC_BAA_ENABLED": "true", "AZURE_API_HOST": "cap-eastus2.openai.azure.com", "INSTALL_EGRESS": "1"}
+    env = {
+        "ANTHROPIC_BAA_ENABLED": "true",
+        "AZURE_API_HOST": "cap-eastus2.openai.azure.com",
+        "INSTALL_EGRESS": "1",
+        "STACKJACK_MCP_HOST": "mcp.example",
+    }
     assert connect_allowed("login.microsoftonline.com", 443, raw, env, "openwebui")
     assert not connect_allowed("api.anthropic.com", 443, raw, env, "openwebui")
     assert not connect_allowed("cap-eastus2.openai.azure.com", 443, raw, env, "openwebui")
@@ -666,13 +701,26 @@ def test_proxy_allowlist_is_per_service():
     assert not azure_host_ok("a.b.openai.azure.com")
     assert not azure_host_ok("foo..eastus2.openai.azure.com")
     assert not azure_host_ok("lab-westeurope.openai.azure.com")
+    assert host_on_named_destination("archive.ubuntu.com", 80, raw, env, APT_DESTINATIONS)
+    assert host_on_named_destination("dl.cloudsmith.io", 443, raw, env, APT_DESTINATIONS)
+    assert not host_on_named_destination("dl.cloudsmith.io", 80, raw, env, APT_DESTINATIONS)
+    assert not host_on_named_destination("pkg.cloudflare.com", 443, raw, env, APT_DESTINATIONS)
+    assert host_on_named_destination("pypi.org", 443, raw, {"INSTALL_EGRESS": "1"}, APT_DESTINATIONS)
+    assert not host_on_named_destination("pypi.org", 443, raw, {}, APT_DESTINATIONS)
+    assert host_on_named_destination("mcp.example", 443, raw, env, MCP_DESTINATIONS)
+    assert not host_on_named_destination("archive.ubuntu.com", 443, raw, env, MCP_DESTINATIONS)
+    assert "is_global" in (ROOT / "stack" / "egress_proxy.py").read_text(encoding="utf-8")
     assert forbidden_ip("127.0.0.1")
     assert forbidden_ip("10.1.2.3")
     assert forbidden_ip("192.168.1.1")
     assert forbidden_ip("100.64.0.1")
+    assert forbidden_ip("::ffff:100.64.0.1")
     assert forbidden_ip("169.254.1.1")
     assert forbidden_ip("fd00::1")
-    assert not forbidden_ip("203.0.113.10")
+    assert forbidden_ip("203.0.113.10")
+    assert forbidden_ip("2001:db8::1")
+    assert forbidden_ip("224.0.0.1")
+    assert not forbidden_ip("8.8.8.8")
     with pytest.raises(SystemExit):
         bind_address("0.0.0.0")
     with pytest.raises(SystemExit):
@@ -683,13 +731,21 @@ def test_proxy_allowlist_is_per_service():
     def connect(host: str, port: int):
         dialed.append((host, port))
         left, right = socket.socketpair()
+        if port == 80:
+            def reply() -> None:
+                right.recv(4096)
+                right.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n")
+                right.close()
+
+            threading.Thread(target=reply, daemon=True).start()
+            return left
         right.close()
         return left
 
     def resolve(host: str) -> list[str]:
         if host == "api.anthropic.com":
             return ["10.1.2.3", "192.168.0.5", "100.64.0.8", "fd00::2"]
-        return ["203.0.113.10", "127.0.0.1"]
+        return ["8.8.8.8", "127.0.0.1"]
 
     proxy = EgressProxy(raw, env, connect=connect, resolve=resolve)
     assert all(sock.getsockname()[0] == "127.0.0.1" for _user, sock in proxy.sockets)
@@ -698,6 +754,7 @@ def test_proxy_allowlist_is_per_service():
 
     def request(user: str, payload: bytes) -> bytes:
         sock = socket.create_connection(("127.0.0.1", proxy.port_for(user)), timeout=2)
+        sock.settimeout(2)
         sock.sendall(payload)
         data = b""
         while b"\r\n" not in data:
@@ -729,9 +786,33 @@ def test_proxy_allowlist_is_per_service():
         assert wrong_port.startswith(b"HTTP/1.1 403")
         get = request("litellm", b"GET http://cap-eastus2.openai.azure.com/ HTTP/1.1\r\nHost: cap-eastus2.openai.azure.com\r\n\r\n")
         assert get.startswith(b"HTTP/1.1 405")
+        apt = request("apt", b"CONNECT archive.ubuntu.com:443 HTTP/1.1\r\nHost: archive.ubuntu.com:443\r\n\r\n")
+        assert apt.startswith(b"HTTP/1.1 200")
+        apt_host = request("apt", b"CONNECT archive.ubuntu.com:443 HTTP/1.1\r\nHost: evil.example:443\r\n\r\n")
+        assert apt_host.startswith(b"HTTP/1.1 403")
+        cloud = request("apt", b"CONNECT pkg.cloudflare.com:443 HTTP/1.1\r\nHost: pkg.cloudflare.com:443\r\n\r\n")
+        assert cloud.startswith(b"HTTP/1.1 403")
+        http_ok = request(
+            "apt",
+            b"GET http://archive.ubuntu.com/ubuntu/ HTTP/1.1\r\nHost: archive.ubuntu.com\r\n\r\n",
+        )
+        assert http_ok.startswith(b"HTTP/1.1 200")
+        http_bad = request(
+            "apt",
+            b"GET http://archive.ubuntu.com/ubuntu/ HTTP/1.1\r\nHost: evil.example\r\n\r\n",
+        )
+        assert http_bad.startswith(b"HTTP/1.1 403")
+        mcp = request("policy-gateway", b"CONNECT mcp.example:443 HTTP/1.1\r\nHost: mcp.example:443\r\n\r\n")
+        assert mcp.startswith(b"HTTP/1.1 200")
+        mcp_bad = request(
+            "policy-gateway",
+            b"CONNECT archive.ubuntu.com:443 HTTP/1.1\r\nHost: archive.ubuntu.com:443\r\n\r\n",
+        )
+        assert mcp_bad.startswith(b"HTTP/1.1 403")
     finally:
         proxy.close()
-    assert ("203.0.113.10", 443) in dialed
+    assert ("8.8.8.8", 443) in dialed
+    assert ("8.8.8.8", 80) in dialed
     assert ("10.1.2.3", 443) not in dialed
     assert ("127.0.0.1", 443) not in dialed
     litellm = (ROOT / "deploy" / "systemd" / "litellm.service").read_text(encoding="utf-8")
@@ -740,6 +821,18 @@ def test_proxy_allowlist_is_per_service():
     assert "HTTPS_PROXY=http://127.0.0.1:8889" in litellm
     assert "HTTPS_PROXY=http://127.0.0.1:8888" in webui
     assert "HTTPS_PROXY=" not in analyzer
+    gateway = (ROOT / "deploy" / "systemd" / "policy-gateway.service").read_text(encoding="utf-8")
+    assert "HTTPS_PROXY=http://127.0.0.1:8891" in gateway
+    assert "NO_PROXY=127.0.0.1,127.0.0.2,localhost" in gateway
+    assert {user for user, _port in PROXY_LISTENERS} >= {"openwebui", "litellm", "apt", "policy-gateway"}
+    install = (ROOT / "deploy" / "install.sh").read_text(encoding="utf-8")
+    assert install.index("99local-ai-proxy") < install.index("\napt-get update")
+    assert install.rindex("systemctl restart egress-proxy.service") < install.rindex("99local-ai-proxy")
+    assert "0.pool.ntp.org" in (ROOT / "deploy" / "systemd" / "timesyncd.conf.d" / "local-ai.conf").read_text(encoding="utf-8")
+    assert "time.cloudflare.com" not in (ROOT / "deploy" / "egress-destinations.yaml").read_text(encoding="utf-8")
+    nft_unit = (ROOT / "deploy" / "systemd" / "local-ai-egress-nft.service").read_text(encoding="utf-8")
+    assert "Before=network-pre.target" in nft_unit
+    assert "--nft-only" in (ROOT / "deploy" / "egress-refresh.sh").read_text(encoding="utf-8")
 
 
 def test_open_webui_refuses_zero_client_id():

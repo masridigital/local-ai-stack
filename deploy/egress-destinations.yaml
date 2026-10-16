@@ -41,12 +41,6 @@ destinations:
     port: 443
     proto: tcp
     purpose: Caddy apt repository
-  - name: cloudflared-apt
-    users: [root]
-    hosts: [pkg.cloudflare.com]
-    port: 443
-    proto: tcp
-    purpose: cloudflared apt repository, not the tunnel
   - name: spacy-model
     users: [root]
     hosts:
@@ -68,10 +62,13 @@ destinations:
     purpose: one-time local MiniLM download during apply. Dropped after install. The openwebui user cannot reach these hosts.
   - name: ntp
     users: [systemd-timesync]
-    hosts: [time.cloudflare.com]
+    hosts:
+      - 0.pool.ntp.org
+      - 1.pool.ntp.org
+      - 2.pool.ntp.org
     port: 123
     proto: udp
-    purpose: time sync via systemd-timesyncd
+    purpose: time sync via systemd-timesyncd. Not a Cloudflare host. UDP has no SNI, so the timesyncd drop-in is what the client queries.
   - name: azure-openai
     users: [litellm]
     env: AZURE_API_HOST
@@ -107,13 +104,4 @@ destinations:
     port: 443
     proto: tcp
     optional: true
-    purpose: MCP upstream, disabled until an explicit host is set
-  - name: cloudflared
-    users: [cloudflared]
-    hosts:
-      - region1.v2.argotunnel.com
-      - region2.v2.argotunnel.com
-    port: 7844
-    proto: tcp
-    enabled: false
-    purpose: tunnel connector for a future non-PHI path; never Open WebUI or LiteLLM
+    purpose: MCP upstream, disabled until an explicit host is set. The policy gateway reaches it through 127.0.0.1:8891.

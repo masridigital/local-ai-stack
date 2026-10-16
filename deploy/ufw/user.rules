@@ -12,7 +12,7 @@ allow out to security.ubuntu.com port 80 proto tcp
 allow out to security.ubuntu.com port 443 proto tcp
 # user root
 allow out to dl.cloudsmith.io port 443 proto tcp
-# user root
-allow out to pkg.cloudflare.com port 443 proto tcp
 # user systemd-timesync
-allow out to time.cloudflare.com port 123 proto udp
+allow out to 0.pool.ntp.org port 123 proto udp
+allow out to 1.pool.ntp.org port 123 proto udp
+allow out to 2.pool.ntp.org port 123 proto udp

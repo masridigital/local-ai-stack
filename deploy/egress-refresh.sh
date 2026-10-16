@@ -5,6 +5,10 @@ set -euo pipefail
 
 unset INSTALL_EGRESS
 root="${LOCAL_AI_ROOT:?}"
+if [[ "${1:-}" == "--nft-only" ]]; then
+  python3 "$root/scripts/egress_nft.py" | nft -f -
+  exit 0
+fi
 install -m 0644 "$root/deploy/egress-destinations.yaml" /etc/local-ai-stack/egress-destinations.yaml
 python3 "$root/scripts/egress_owners.py" --apply-ufw --dest "$root/deploy/egress-destinations.yaml"
 python3 "$root/scripts/egress_nft.py" | nft -f -

@@ -29,6 +29,25 @@ if [[ "$(id -u)" -ne 0 ]]; then
   exit 1
 fi
 
+# Steady state does not keep the cloudflared apt origin. Drop a leftover list
+# before apt-get update so a re-apply does not dial pkg.cloudflare.com.
+rm -f /etc/apt/sources.list.d/cloudflared.list
+# Re-apply: the output filter is already loaded. Open install-only names on the
+# apt proxy, then let apt and pip use it. First apply has no proxy yet.
+if [[ -f /etc/apt/apt.conf.d/99local-ai-proxy ]] && systemctl is-active --quiet egress-proxy.service; then
+  install -d -m 0755 /etc/systemd/system/egress-proxy.service.d
+  printf '[Service]\nEnvironment=INSTALL_EGRESS=1\n' \
+    > /etc/systemd/system/egress-proxy.service.d/install-egress.conf
+  systemctl daemon-reload
+  systemctl restart egress-proxy.service
+  export http_proxy=http://127.0.0.1:8890
+  export https_proxy=http://127.0.0.1:8890
+  export HTTP_PROXY=http://127.0.0.1:8890
+  export HTTPS_PROXY=http://127.0.0.1:8890
+  export no_proxy=127.0.0.1,127.0.0.2,localhost
+  export NO_PROXY=127.0.0.1,127.0.0.2,localhost
+fi
+
 export DEBIAN_FRONTEND=noninteractive
 apt-get update
 apt-get install -y cryptsetup
@@ -302,6 +321,9 @@ install -m 0755 "$ROOT/deploy/egress-refresh.sh" /usr/local/sbin/local-ai-egress
 sed "s|@LOCAL_AI_ROOT@|$ROOT|g" "$ROOT/deploy/systemd/local-ai-egress-refresh.service" \
   > /etc/systemd/system/local-ai-egress-refresh.service
 install -m 0644 "$ROOT/deploy/systemd/local-ai-egress-refresh.timer" /etc/systemd/system/local-ai-egress-refresh.timer
+sed "s|@LOCAL_AI_ROOT@|$ROOT|g" "$ROOT/deploy/systemd/local-ai-egress-nft.service" \
+  > /etc/systemd/system/local-ai-egress-nft.service
+rm -f /etc/systemd/system/egress-proxy.service.d/install-egress.conf
 install -d -m 0750 -o egress-proxy -g egress-proxy /var/lib/local-ai-stack/egress-proxy
 install -m 0755 "$ROOT/deploy/egress-proxy.py" /usr/local/sbin/local-ai-egress-proxy
 install -m 0644 "$ROOT/deploy/egress-destinations.yaml" /etc/local-ai-stack/egress-destinations.yaml
@@ -324,9 +346,13 @@ if [[ -f /etc/wireguard/wg0.conf ]]; then
 else
   systemctl disable wg-quick@wg0.service || true
 fi
+install -d -m 0755 /etc/systemd/timesyncd.conf.d
+install -m 0644 "$ROOT/deploy/systemd/timesyncd.conf.d/local-ai.conf" /etc/systemd/timesyncd.conf.d/local-ai.conf
 systemctl enable systemd-timesyncd
+systemctl try-restart systemd-timesyncd || true
 systemctl restart systemd-journald || true
 systemctl enable auditd || true
+systemctl enable local-ai-egress-nft.service
 systemctl enable --now local-ai-egress-refresh.timer
 
 systemctl restart egress-proxy.service
@@ -355,5 +381,7 @@ unset SCOPE_VIRTUAL_KEY_FORCE
 install -d -m 0755 "$(dirname "$baa_stamp")"
 printf '%s\n' "$baa_current" > "$baa_stamp"
 chmod 0644 "$baa_stamp"
+rm -f /etc/apt/sources.list.d/cloudflared.list
+install -m 0644 "$ROOT/deploy/apt/99local-ai-proxy" /etc/apt/apt.conf.d/99local-ai-proxy
 
 echo "install complete; native units are enabled and cloudflared is disabled"
