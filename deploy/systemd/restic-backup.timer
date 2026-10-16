@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily encrypted restic backup
+
+[Timer]
+OnCalendar=*-*-* 02:30:00
+Persistent=true
+RandomizedDelaySec=15min
+Unit=restic-backup.service
+
+[Install]
+WantedBy=timers.target

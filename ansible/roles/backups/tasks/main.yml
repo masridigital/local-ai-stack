@@ -1,0 +1,131 @@
+---
+- name: Install restic
+  ansible.builtin.apt:
+    name: restic
+    state: present
+
+- name: Create restic directories
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "{{ item.mode }}"
+  loop:
+    - {path: /etc/restic, mode: "0700"}
+    - {path: /var/lib/local-ai-stack/backups, mode: "0700"}
+    - {path: /var/lib/local-ai-stack/backups/cache, mode: "0700"}
+    - {path: /var/lib/local-ai-stack/backups/staging, mode: "0700"}
+    - {path: /var/lib/local-ai-stack/backups/restore-test, mode: "0700"}
+    - {path: /usr/local/sbin, mode: "0755"}
+  loop_control:
+    label: "{{ item.path }}"
+
+- name: Install the restic password from Vault
+  ansible.builtin.copy:
+    dest: "{{ backups_password_file }}"
+    content: "{{ backups_password }}"
+    owner: root
+    group: root
+    mode: "0600"
+  no_log: true
+  when: backups_password | trim | length > 0
+
+- name: Reject restic password overrides in backups_extra_env
+  ansible.builtin.assert:
+    that:
+      - backups_extra_env is mapping
+      - "'RESTIC_PASSWORD' not in backups_extra_env"
+      - "'RESTIC_PASSWORD_COMMAND' not in backups_extra_env"
+    fail_msg: >-
+      backups_extra_env must not set RESTIC_PASSWORD or RESTIC_PASSWORD_COMMAND.
+      Provision backups_password from Ansible Vault so the secret stays in the
+      root-only password file.
+
+- name: Install the restic environment file
+  ansible.builtin.template:
+    src: local-ai.env.j2
+    dest: "{{ backups_env_file }}"
+    owner: root
+    group: root
+    mode: "0600"
+  no_log: true
+
+- name: Install the restic alert environment file
+  ansible.builtin.template:
+    src: alert.env.j2
+    dest: "{{ backups_alert_env_file }}"
+    owner: root
+    group: root
+    mode: "0600"
+  no_log: true
+
+- name: Install restic scripts
+  ansible.builtin.copy:
+    src: "{{ repo_root }}/deploy/backup/{{ item.src }}"
+    dest: "{{ item.dest }}"
+    owner: root
+    group: root
+    mode: "0750"
+  loop:
+    - src: restic-env.sh
+      dest: /usr/local/sbin/restic-env.sh
+    - src: restic-backup.sh
+      dest: /usr/local/sbin/local-ai-restic-backup
+    - src: restic-restore-test.sh
+      dest: /usr/local/sbin/local-ai-restic-restore-test
+    - src: restic-alert.sh
+      dest: /usr/local/sbin/local-ai-restic-alert
+  loop_control:
+    label: "{{ item.dest }}"
+
+- name: Install restic systemd units
+  ansible.builtin.copy:
+    src: "{{ repo_root }}/deploy/systemd/{{ item }}"
+    dest: "/etc/systemd/system/{{ item }}"
+    owner: root
+    group: root
+    mode: "0644"
+  loop:
+    - restic-backup.service
+    - restic-backup.timer
+    - restic-restore-test.service
+    - restic-restore-test.timer
+    - restic-failure.service
+
+- name: Leave restic timers disabled until a Vault password is provisioned
+  ansible.builtin.systemd:
+    name: "{{ item }}"
+    enabled: false
+    state: stopped
+    daemon_reload: true
+  loop:
+    - restic-backup.timer
+    - restic-restore-test.timer
+  when: backups_password | trim | length == 0
+
+- name: Check the Vault restic password file
+  ansible.builtin.stat:
+    path: "{{ backups_password_file }}"
+  register: backups_password_stat
+  when: backups_password | trim | length > 0
+
+- name: Require the restic password file to be root-only
+  ansible.builtin.assert:
+    that:
+      - backups_password_stat.stat.exists
+      - backups_password_stat.stat.mode == '0600'
+      - backups_password_stat.stat.pw_name == 'root'
+    fail_msg: The restic password file must exist, mode 0600, owned by root.
+  when: backups_password | trim | length > 0
+
+- name: Enable the backup and restore-test timers
+  ansible.builtin.systemd:
+    name: "{{ item }}"
+    enabled: true
+    state: started
+    daemon_reload: true
+  loop:
+    - restic-backup.timer
+    - restic-restore-test.timer
+  when: backups_password | trim | length > 0

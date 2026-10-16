@@ -163,6 +163,7 @@ def check() -> list[str]:
         "wireguard",
         "firewall",
         "retention",
+        "backups",
     ):
         if role not in site:
             errors.append(f"ansible site is missing {role}")

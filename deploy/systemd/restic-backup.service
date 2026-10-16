@@ -1,0 +1,22 @@
+[Unit]
+Description=Encrypted local restic backup of the local AI stack
+OnFailure=restic-failure.service
+
+[Service]
+Type=oneshot
+Environment=HOME=/var/lib/local-ai-stack/backups
+EnvironmentFile=/etc/restic/local-ai.env
+ExecStart=/usr/local/sbin/local-ai-restic-backup
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/lib/local-ai-stack/backups
+CapabilityBoundingSet=CAP_DAC_READ_SEARCH CAP_DAC_OVERRIDE CAP_CHOWN CAP_FOWNER CAP_SETUID CAP_SETGID
+RestrictAddressFamilies=AF_UNIX
+IPAddressDeny=any
+UMask=0077
+Nice=10
+
+[Install]
+WantedBy=multi-user.target

@@ -35,7 +35,7 @@ Who reviews: the designated security reviewer. Fail-closed and blocked-tool rows
 
 ## Backups
 
-restic or borg, encrypted, 3-2-1, one copy immutable/offsite. Keys held separately from the repo. Quarterly restore test. RTO/RPO 24h/24h. While the stack is down, work stays in the green lane. Do not fall back to an unredacted tool.
+restic, encrypted, on the LUKS volume at `/var/lib/local-ai-stack/backups/repo`. The password file is `/etc/restic/password`, mode 0600, root-owned, and is not in git. The `backups` Ansible role enables `restic-backup.timer` and `restic-restore-test.timer` only after `backups_password` is provisioned from Vault. Chat snapshots are kept 30 days. The quarterly timer restores the audit snapshot into a throwaway directory and checks a canary. A failed unit starts `restic-failure.service`, which exits non-zero until `backups_alert_hook` is an executable absolute path. That hook is not given the password, and the unit denies every network address. Off-host repository URLs are refused: restic has no egress rule. RTO/RPO 24h/24h. While the stack is down, work stays in the green lane. Do not fall back to an unredacted tool.
 
 ## Egress list
 

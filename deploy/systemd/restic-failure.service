@@ -1,0 +1,18 @@
+[Unit]
+Description=Alert when a restic backup or restore test fails
+
+[Service]
+Type=oneshot
+# Placeholder: /usr/local/sbin/local-ai-restic-alert exits 1 until
+# backups_alert_hook is an executable absolute path. The hook is loaded
+# from alert.env so this unit never sees the restic password.
+EnvironmentFile=-/etc/restic/alert.env
+ExecStart=/usr/local/sbin/local-ai-restic-alert
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+CapabilityBoundingSet=
+RestrictAddressFamilies=AF_UNIX
+IPAddressDeny=any
+UMask=0077
