@@ -5,8 +5,8 @@ set -euo pipefail
 
 env_file="${LOCAL_AI_RESTIC_ENV:-/etc/restic/local-ai.env}"
 if [[ ! -f "$env_file" ]]; then
-  echo "restic backup skipped: ${env_file} is absent" >&2
-  exit 0
+  echo "restic password file is missing: ${env_file} is absent" >&2
+  exit 1
 fi
 
 set -a
@@ -17,18 +17,26 @@ set +a
 data_root="${LOCAL_AI_DATA_ROOT:-/var/lib/local-ai-stack}"
 password_file="${RESTIC_PASSWORD_FILE:-}"
 
-if [[ -z "${RESTIC_REPOSITORY:-}" || -z "$password_file" || ! -e "$password_file" ]]; then
-  echo "restic backup skipped: repository is not configured" >&2
-  exit 0
+if [[ -z "${RESTIC_REPOSITORY:-}" ]]; then
+  echo "restic repository is not configured" >&2
+  exit 1
+fi
+if [[ -z "$password_file" || ! -e "$password_file" ]]; then
+  echo "restic password file is missing" >&2
+  exit 1
 fi
 if [[ ! -s "$password_file" ]]; then
   echo "restic password file is empty" >&2
   exit 1
 fi
 password_mode="$(stat -c %a "$password_file")"
+if [[ "$password_mode" != "600" ]]; then
+  echo "restic password file must be mode 0600" >&2
+  exit 1
+fi
 password_owner="$(stat -c %U "$password_file")"
-if [[ "$password_mode" != "600" || "$password_owner" != "root" ]]; then
-  echo "restic password file must be mode 0600 and owned by root" >&2
+if [[ "$password_owner" != "root" ]]; then
+  echo "restic password file must be owned by root" >&2
   exit 1
 fi
 

@@ -1,6 +1,8 @@
 ---
-# Password is never given a default. Place it in Ansible Vault and pass
-# backups_password, or create /etc/restic/password (mode 0600, root) on the host.
+# Password is never given a default. Pass backups_password from Ansible Vault.
+# Timers stay disabled, and the role asserts, until that value is present.
+# The password file is written mode 0600 and owned by root. A missing, empty,
+# or loose file makes the backup and restore-test scripts exit non-zero.
 # Chat snapshots are kept 30 days. Audit snapshots are kept for the 6-year
 # HIPAA documentation window. The quarterly timer restores the audit tag only.
 backups_password: ""

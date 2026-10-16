@@ -1,0 +1,6 @@
+[Unit]
+Description=Surface a failed restic backup or restore test
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/logger -t local-ai-restic -p user.err -- restic failed closed

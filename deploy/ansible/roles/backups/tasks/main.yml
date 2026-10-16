@@ -21,7 +21,7 @@
   loop_control:
     label: "{{ item.path }}"
 
-- name: Install the restic password when provided
+- name: Install the restic password from Vault
   ansible.builtin.copy:
     dest: "{{ backups_password_file }}"
     content: "{{ backups_password }}"
@@ -29,7 +29,7 @@
     group: root
     mode: "0600"
   no_log: true
-  when: backups_password | length > 0
+  when: backups_password | trim | length > 0
 
 - name: Install the restic environment file
   ansible.builtin.template:
@@ -71,12 +71,46 @@
       dest: /etc/systemd/system/restic-restore-test.service
     - src: restic-restore-test.timer.j2
       dest: /etc/systemd/system/restic-restore-test.timer
+    - src: restic-failure.service.j2
+      dest: /etc/systemd/system/restic-failure.service
   loop_control:
     label: "{{ item.dest }}"
   notify: Reload backup units
 
 - name: Apply backup unit changes
   ansible.builtin.meta: flush_handlers
+
+- name: Leave restic timers disabled until a Vault password is provisioned
+  ansible.builtin.systemd:
+    name: "{{ item }}"
+    enabled: false
+    state: stopped
+    daemon_reload: true
+  loop:
+    - restic-backup.timer
+    - restic-restore-test.timer
+  when: backups_password | trim | length == 0
+
+- name: Require a Vault-provisioned restic password before enabling timers
+  ansible.builtin.assert:
+    that:
+      - backups_password | trim | length > 0
+    fail_msg: >-
+      Provision backups_password from Ansible Vault before enabling restic timers.
+      The timers stay disabled until that secret is present.
+
+- name: Check the Vault restic password file
+  ansible.builtin.stat:
+    path: "{{ backups_password_file }}"
+  register: backups_password_stat
+
+- name: Require the restic password file to be root-only
+  ansible.builtin.assert:
+    that:
+      - backups_password_stat.stat.exists
+      - backups_password_stat.stat.mode == '0600'
+      - backups_password_stat.stat.pw_name == 'root'
+    fail_msg: The restic password file must exist, mode 0600, owned by root.
 
 - name: Enable the backup and restore-test timers
   ansible.builtin.systemd:
@@ -87,3 +121,4 @@
   loop:
     - restic-backup.timer
     - restic-restore-test.timer
+  when: backups_password | trim | length > 0

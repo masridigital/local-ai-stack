@@ -2,6 +2,7 @@
 Description=Encrypted restic backup of the local AI stack
 Wants=network-online.target
 After=network-online.target
+OnFailure=restic-failure.service
 
 [Service]
 Type=oneshot
