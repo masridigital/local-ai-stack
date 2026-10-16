@@ -1,0 +1,47 @@
+[Unit]
+Description=Policy gateway (Presidio choke point, loopback only)
+# listen 127.0.0.1:8088
+After=network-online.target litellm.service presidio-analyzer.service presidio-anonymizer.service postgresql.service
+Wants=network-online.target litellm.service presidio-analyzer.service presidio-anonymizer.service
+
+[Service]
+Type=simple
+User=policy-gateway
+Group=policy-gateway
+WorkingDirectory=/opt/policy-gateway
+EnvironmentFile=/etc/policy-gateway/config.env
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=BIND_HOST=127.0.0.1
+Environment=GATEWAY_PORT=8088
+Environment=STACK_ROOT=/opt/policy-gateway
+Environment=POLICY_PATH=/opt/policy-gateway/litellm/policy.yaml
+Environment=RECOGNIZER_DIR=/opt/policy-gateway/presidio/recognizers
+Environment=PRESIDIO_ANALYZER_API_BASE=http://127.0.0.1:3000
+Environment=PRESIDIO_ANONYMIZER_API_BASE=http://127.0.0.1:3001
+Environment=LITELLM_BASE_URL=http://127.0.0.1:4000
+LoadCredential=litellm_virtual_key:/etc/policy-gateway/litellm_virtual_key
+LoadCredential=audit_database_url:/etc/policy-gateway/audit_database_url
+Environment=LITELLM_API_KEY_FILE=%d/litellm_virtual_key
+Environment=AUDIT_DATABASE_URL_FILE=%d/audit_database_url
+ExecStart=/opt/policy-gateway/venv/bin/python -m stack.server
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=
+UMask=0077
+ReadWritePaths=/var/lib/local-ai-stack/policy-gateway
+IPAddressDeny=any
+IPAddressAllow=localhost
+
+[Install]
+WantedBy=local-ai-stack.target

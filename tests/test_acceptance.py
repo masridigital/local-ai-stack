@@ -270,10 +270,13 @@ def test_06_audit_has_user_and_no_raw_phi(policy, presidio_services, audit, reco
     assert change["event_type"] == "config_change"
     assert change["user_id"] == USER
     assert change["config_hash"]
-    compose = (ROOT / "docker-compose.yml").read_text(encoding="utf-8")
-    assert "AUDIT_LOG_LEVEL: METADATA" in compose
-    assert "LITELLM_LOG: ERROR" in compose
-    assert 'max-size: "10m"' in compose
+    webui_env = (ROOT / "deploy" / "env" / "open-webui.env").read_text(encoding="utf-8")
+    assert "AUDIT_LOG_LEVEL=METADATA" in webui_env
+    litellm_unit = (ROOT / "deploy" / "systemd" / "litellm.service").read_text(encoding="utf-8")
+    assert "LITELLM_LOG=ERROR" in litellm_unit
+    journal = (ROOT / "deploy" / "journald" / "local-ai.conf").read_text(encoding="utf-8")
+    assert "SystemMaxFileSize=10M" in journal
+    assert "SystemMaxFiles=5" in journal
 
 
 def test_06_openwebui_db_scan_and_retention(tmp_path, recognizers, policy):
@@ -320,22 +323,25 @@ def test_07_and_09_exposure_and_tunnel():
 
 
 def test_08_secrets_are_files_not_env():
-    compose = yaml.safe_load((ROOT / "docker-compose.yml").read_text(encoding="utf-8"))
-    assert "env_file" not in (ROOT / "docker-compose.yml").read_text(encoding="utf-8")
-    for name, service in compose["services"].items():
-        for key, value in (service.get("environment") or {}).items():
-            rendered = str(value)
-            assert "sk-" not in rendered
-            assert "BEGIN PRIVATE" not in rendered
-            assert "api_key" not in key.lower() or key.endswith("_FILE") or "BASE" in key
-    secret_names = set(compose["secrets"])
-    assert "litellm_master_key" in secret_names
-    assert "cloudflared_credentials" not in secret_names
-    cloud = yaml.safe_load((ROOT / "deploy" / "cloudflared" / "docker-compose.yml").read_text(encoding="utf-8"))
-    assert "cloudflared_credentials" in cloud["secrets"]
+    assert not (ROOT / "docker-compose.yml").exists()
+    services = yaml.safe_load((ROOT / "deploy" / "services.yaml").read_text(encoding="utf-8"))
+    creds = {cred for app in services["apps"] for cred in app["credentials"]}
+    assert "litellm_master_key" in creds
+    for app in services["apps"]:
+        unit = (ROOT / "deploy" / "systemd" / app["unit"]).read_text(encoding="utf-8")
+        for cred in app["credentials"]:
+            assert f"LoadCredential={cred}:" in unit
+        assert "sk-" not in unit
+    for path in (ROOT / "deploy" / "env").glob("*.env"):
+        text = path.read_text(encoding="utf-8")
+        assert "sk-" not in text
+        assert "example-not-a-secret" not in text
     example = (ROOT / ".env.example").read_text(encoding="utf-8")
     assert "example-not-a-secret" in example
     assert "sk-ant-" not in example
+    assert "0600" in (ROOT / "deploy" / "write-secret.sh").read_text(encoding="utf-8")
+    cloud = (ROOT / "deploy" / "systemd" / "cloudflared.service").read_text(encoding="utf-8")
+    assert "/etc/cloudflared/credentials.json" in cloud
 
 
 def test_10_and_11_allowlist(policy, presidio_services, audit):
@@ -447,6 +453,16 @@ def test_egress_default_deny():
     assert set(hosts) <= listed
     assert "region1.v2.argotunnel.com" not in hosts
     assert "api.anthropic.com" in hosts
+    assert "docker.io" not in rules
+    from scripts.egress_owners import render_owner_rules
+
+    owner = render_owner_rules(raw, {"api.anthropic.com": ["192.0.2.10"]})
+    assert "--uid-owner litellm" in owner
+    assert "192.0.2.10" in owner
+    assert "--uid-owner policy-gateway -j REJECT" in owner
+    opened = render_owner_rules(raw, {"mcp.example": ["192.0.2.20"]}, {"STACKJACK_MCP_HOST": "mcp.example"})
+    assert "policy-gateway -j REJECT" not in opened
+    assert "--uid-owner policy-gateway" in opened
 
 
 def test_fixture_header_and_docs():

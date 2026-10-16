@@ -1,5 +1,5 @@
 # EXAMPLE ONLY. The policy gateway is the tested choke point.
-# Secrets come from Docker secrets exported by deploy/litellm-entrypoint.sh.
+# Secrets come from systemd LoadCredential via deploy/litellm-run.sh.
 # Verify every model against Cap's BAAs before ANTHROPIC_BAA_ENABLED is turned on.
 model_list:
   - model_name: claude-sonnet
@@ -54,7 +54,7 @@ guardrails:
       apply_to_output: true
       presidio_analyzer_api_base: os.environ/PRESIDIO_ANALYZER_API_BASE
       presidio_anonymizer_api_base: os.environ/PRESIDIO_ANONYMIZER_API_BASE
-      presidio_ad_hoc_recognizers: /app/presidio/recognizers.json
+      presidio_ad_hoc_recognizers: /opt/litellm/presidio/recognizers.json
       presidio_score_thresholds:
         ALL: 0.4
       pii_entities_config:
@@ -76,7 +76,7 @@ guardrails:
       default_on: true
       presidio_analyzer_api_base: os.environ/PRESIDIO_ANALYZER_API_BASE
       presidio_anonymizer_api_base: os.environ/PRESIDIO_ANONYMIZER_API_BASE
-      presidio_ad_hoc_recognizers: /app/presidio/recognizers.json
+      presidio_ad_hoc_recognizers: /opt/litellm/presidio/recognizers.json
       presidio_score_thresholds:
         ALL: 0.4
       pii_entities_config:

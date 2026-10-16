@@ -1,0 +1,12 @@
+---
+- name: open webui
+  ansible.builtin.include_role:
+    name: python_app
+  vars:
+    app_user: openwebui
+    app_opt: /opt/open-webui
+    app_data: /var/lib/local-ai-stack/webui
+    app_etc: /etc/open-webui
+    app_unit: open-webui.service
+    app_requirements:
+      - requirements/open-webui.txt

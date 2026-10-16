@@ -1,4 +1,4 @@
-"""Small HTTP front for the policy gateway. Binds inside the compose network only."""
+"""Small HTTP front for the policy gateway. Binds to loopback unless BIND_HOST is set."""
 
 from __future__ import annotations
 
@@ -107,11 +107,16 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(data)
 
 
+def bind_address() -> str:
+    host = os.environ.get("BIND_HOST", "127.0.0.1")
+    if not host or host.startswith("0."):
+        raise SystemExit("refusing wildcard bind")
+    return host
+
+
 def main() -> None:
     policy, foundry, presidio, audit = build_deps()
-    # Listen on the container interface. Compose does not publish this port on the host.
-    bind_host = "0.0.0.0"  # nosec B104
-    server = ThreadingHTTPServer((bind_host, int(os.environ.get("GATEWAY_PORT", "8088"))), Handler)
+    server = ThreadingHTTPServer((bind_address(), int(os.environ.get("GATEWAY_PORT", "8088"))), Handler)
     server.deps = (policy, foundry, presidio, audit)  # type: ignore[attr-defined]
     key_path = os.environ.get("LITELLM_API_KEY_FILE", "")
     api_key = Path(key_path).read_text(encoding="utf-8").strip() if key_path else os.environ.get("LITELLM_API_KEY", "")

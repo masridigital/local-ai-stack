@@ -1,0 +1,44 @@
+[Unit]
+Description=Open WebUI (loopback only; TLS is Caddy)
+# listen 127.0.0.1:8080
+After=network-online.target policy-gateway.service
+Wants=network-online.target policy-gateway.service
+
+[Service]
+Type=simple
+User=openwebui
+Group=openwebui
+WorkingDirectory=/var/lib/local-ai-stack/webui
+EnvironmentFile=/etc/open-webui/config.env
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=HOME=/var/lib/local-ai-stack/webui
+Environment=HF_HOME=/var/lib/local-ai-stack/webui/hf
+Environment=SENTENCE_TRANSFORMERS_HOME=/var/lib/local-ai-stack/webui/st
+Environment=DATA_DIR=/var/lib/local-ai-stack/webui
+LoadCredential=webui_secret_key:/etc/open-webui/webui_secret_key
+LoadCredential=microsoft_client_secret:/etc/open-webui/microsoft_client_secret
+LoadCredential=litellm_virtual_key:/etc/open-webui/litellm_virtual_key
+ExecStart=/opt/open-webui/open-webui-run.sh
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=
+UMask=0077
+ReadWritePaths=/var/lib/local-ai-stack/webui
+IPAddressDeny=any
+IPAddressAllow=localhost
+IPAddressAllow=login.microsoftonline.com
+IPAddressAllow=login.microsoft.com
+
+[Install]
+WantedBy=local-ai-stack.target

@@ -1,0 +1,19 @@
+---
+- name: retention units
+  ansible.builtin.copy:
+    src: "{{ repo_root }}/deploy/systemd/{{ item }}"
+    dest: "/etc/systemd/system/{{ item }}"
+    mode: "0644"
+  loop:
+    - local-ai-retention.service
+    - local-ai-retention.timer
+    - local-ai-stack.target
+
+- name: enable retention timer and the stack target
+  ansible.builtin.systemd:
+    name: "{{ item }}"
+    enabled: true
+    daemon_reload: true
+  loop:
+    - local-ai-retention.timer
+    - local-ai-stack.target

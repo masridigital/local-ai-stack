@@ -7,8 +7,8 @@ Open WebUI is the only user-facing app. It is reached over VPN or the LAN addres
 1. In Cap’s Entra tenant, register an app for Open WebUI. Redirect URI: `https://webui.lan.internal/oauth/microsoft/callback` (the real LAN name, not a public hostname).
 2. Supported accounts: this tenant only.
 3. API permissions: `openid`, `email`, `profile`. Admin consent.
-4. Create a client secret in the vault. `deploy/install.sh` writes it to `/etc/local-ai-stack/secrets/microsoft_client_secret` from `MICROSOFT_CLIENT_SECRET`. Do not put it in compose or git.
-5. Set `MICROSOFT_CLIENT_ID`, `AZURE_TENANT_ID`, and `OPENID_PROVIDER_URL` (`https://login.microsoftonline.com/<tenant>/v2.0/.well-known/openid-configuration`) in `/etc/local-ai-stack/config.env`.
+4. Create a client secret in the vault. `deploy/install.sh` writes it to `/etc/open-webui/microsoft_client_secret` from `MICROSOFT_CLIENT_SECRET` (mode 0600). Do not put it in a unit file or in git.
+5. Set `MICROSOFT_CLIENT_ID`, `AZURE_TENANT_ID`, and `OPENID_PROVIDER_URL` (`https://login.microsoftonline.com/<tenant>/v2.0/.well-known/openid-configuration`) in `/etc/open-webui/config.env`.
 
 Conditional Access: require MFA for the app. Admins who can change the stack (the `localai` host group, LiteLLM master key holders) use a phishing-resistant method. Sign-in frequency 8 hours, matching `JWT_EXPIRES_IN=8h`.
 
@@ -31,4 +31,4 @@ There is no shared daily admin password in the repo.
 
 ## LiteLLM admin UI
 
-LiteLLM has no published port and no tunnel route. The master key is a Docker secret. Anyone who needs it uses the VPN and a local port forward that is not left listening on `0.0.0.0`.
+LiteLLM binds `127.0.0.1:4000` and has no tunnel route. The master key is `/etc/litellm/litellm_master_key`. Anyone who needs the admin API uses the VPN and an SSH forward to that loopback port.

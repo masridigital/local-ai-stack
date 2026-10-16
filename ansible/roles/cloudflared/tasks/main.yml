@@ -1,0 +1,20 @@
+---
+- name: cloudflared sink config
+  ansible.builtin.copy:
+    src: "{{ repo_root }}/deploy/cloudflared/config.yml"
+    dest: /etc/cloudflared/config.yml
+    mode: "0644"
+
+- name: cloudflared unit
+  ansible.builtin.copy:
+    src: "{{ repo_root }}/deploy/systemd/cloudflared.service"
+    dest: /etc/systemd/system/cloudflared.service
+    mode: "0644"
+
+- name: cloudflared stays disabled
+  ansible.builtin.systemd:
+    name: cloudflared.service
+    enabled: false
+    state: stopped
+    daemon_reload: true
+  failed_when: false

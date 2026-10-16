@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Idempotent Ubuntu Server LTS bootstrap for the local-ai-stack VM.
+# Idempotent native Ubuntu Server LTS install. No Docker.
 # --check validates the repo and does not change the host. --apply requires root.
 set -euo pipefail
 
@@ -30,7 +30,13 @@ fi
 export DEBIAN_FRONTEND=noninteractive
 apt-get update
 apt-get install -y \
-  docker.io \
+  python3 \
+  python3-venv \
+  python3-dev \
+  build-essential \
+  ca-certificates \
+  curl \
+  gnupg \
   ufw \
   unattended-upgrades \
   apt-listchanges \
@@ -38,92 +44,194 @@ apt-get install -y \
   apparmor \
   openssl \
   restic \
-  ca-certificates \
-  curl \
-  python3
+  postgresql \
+  postgresql-contrib \
+  wireguard
 
-if ! getent group docker >/dev/null; then
-  groupadd docker
-fi
-if ! id localai >/dev/null 2>&1; then
-  useradd --system --create-home --home-dir /var/lib/local-ai-stack --shell /usr/sbin/nologin localai
-fi
-usermod -aG docker localai
+bash "$ROOT/deploy/apt-repos.sh"
+apt-get update
+apt-get install -y caddy cloudflared
 
-install -d -m 0700 \
-  /opt/local-ai-stack \
-  /etc/local-ai-stack \
-  /etc/local-ai-stack/secrets \
-  /etc/local-ai-stack/cloudflared \
-  /var/lib/local-ai-stack \
-  /var/lib/local-ai-stack/webui \
-  /var/lib/local-ai-stack/postgres \
-  /var/lib/local-ai-stack/backups \
-  /var/lib/local-ai-stack/certs
-
-install -m 0644 "$ROOT/docker-compose.yml" /opt/local-ai-stack/docker-compose.yml
-rm -rf \
-  /opt/local-ai-stack/litellm \
-  /opt/local-ai-stack/presidio \
-  /opt/local-ai-stack/stack \
-  /opt/local-ai-stack/deploy \
-  /opt/local-ai-stack/postgres \
-  /opt/local-ai-stack/policy-gateway
-cp -a "$ROOT/litellm" /opt/local-ai-stack/litellm
-cp -a "$ROOT/presidio" /opt/local-ai-stack/presidio
-cp -a "$ROOT/stack" /opt/local-ai-stack/stack
-cp -a "$ROOT/deploy" /opt/local-ai-stack/deploy
-cp -a "$ROOT/postgres" /opt/local-ai-stack/postgres
-cp -a "$ROOT/policy-gateway" /opt/local-ai-stack/policy-gateway
-install -m 0644 "$ROOT/requirements.txt" /opt/local-ai-stack/requirements.txt
-install -m 0644 "$ROOT/deploy/cloudflared/config.yml" /etc/local-ai-stack/cloudflared/config.yml
-
-write_secret() {
+create_user() {
   local name="$1"
-  local value="${2:-}"
-  local dest="/etc/local-ai-stack/secrets/${name}"
-  if [[ -z "$value" ]]; then
+  local home="$2"
+  if ! id "$name" >/dev/null 2>&1; then
+    useradd --system --home-dir "$home" --shell /usr/sbin/nologin "$name"
+  fi
+}
+
+create_user presidio-analyzer /var/lib/local-ai-stack/presidio-analyzer
+create_user presidio-anonymizer /var/lib/local-ai-stack/presidio-anonymizer
+create_user litellm /var/lib/local-ai-stack/litellm
+create_user policy-gateway /var/lib/local-ai-stack/policy-gateway
+create_user openwebui /var/lib/local-ai-stack/webui
+
+install -d -m 0755 \
+  /opt/local-ai-stack \
+  /opt/presidio-analyzer \
+  /opt/presidio-anonymizer \
+  /opt/litellm \
+  /opt/policy-gateway \
+  /opt/open-webui \
+  /var/lib/local-ai-stack \
+  /var/lib/local-ai-stack/backups \
+  /var/lib/local-ai-stack/certs \
+  /etc/cloudflared
+
+install -d -m 0700 -o presidio-analyzer -g presidio-analyzer /var/lib/local-ai-stack/presidio-analyzer
+install -d -m 0700 -o presidio-anonymizer -g presidio-anonymizer /var/lib/local-ai-stack/presidio-anonymizer
+install -d -m 0700 -o litellm -g litellm /var/lib/local-ai-stack/litellm
+install -d -m 0700 -o policy-gateway -g policy-gateway /var/lib/local-ai-stack/policy-gateway
+install -d -m 0700 -o openwebui -g openwebui /var/lib/local-ai-stack/webui
+install -d -m 0700 -o openwebui -g openwebui /var/lib/local-ai-stack/webui/hf
+install -d -m 0700 -o openwebui -g openwebui /var/lib/local-ai-stack/webui/st
+install -d -m 0700 /etc/presidio-analyzer /etc/presidio-anonymizer /etc/litellm /etc/policy-gateway /etc/open-webui /etc/postgres
+
+install -d -m 0755 /opt/local-ai-stack/scripts /opt/local-ai-stack/postgres /opt/local-ai-stack/deploy
+cp -a "$ROOT/scripts/ensure_postgres.py" /opt/local-ai-stack/scripts/ensure_postgres.py
+cp -a "$ROOT/postgres/init" /opt/local-ai-stack/postgres/init
+rm -rf /opt/policy-gateway/stack /opt/policy-gateway/litellm /opt/policy-gateway/presidio
+cp -a "$ROOT/stack" /opt/policy-gateway/stack
+cp -a "$ROOT/litellm" /opt/policy-gateway/litellm
+cp -a "$ROOT/presidio" /opt/policy-gateway/presidio
+rm -rf /opt/presidio-analyzer/server /opt/presidio-anonymizer/server
+cp -a "$ROOT/presidio/server/analyzer" /opt/presidio-analyzer/server
+cp -a "$ROOT/presidio/server/anonymizer" /opt/presidio-anonymizer/server
+install -d -m 0755 /opt/litellm/presidio
+install -m 0644 "$ROOT/litellm/config.yaml" /opt/litellm/config.yaml
+install -m 0644 "$ROOT/presidio/recognizers.json" /opt/litellm/presidio/recognizers.json
+install -m 0755 "$ROOT/deploy/litellm-run.sh" /opt/litellm/litellm-run.sh
+install -m 0755 "$ROOT/deploy/open-webui-run.sh" /opt/open-webui/open-webui-run.sh
+chown -R root:root /opt/presidio-analyzer /opt/presidio-anonymizer /opt/litellm /opt/policy-gateway /opt/open-webui
+
+install_config() {
+  local src="$1"
+  local dest="$2"
+  if [[ ! -f "$dest" ]]; then
+    install -m 0600 -o root -g root "$src" "$dest"
+  fi
+}
+
+install_config "$ROOT/deploy/env/litellm.env" /etc/litellm/config.env
+install_config "$ROOT/deploy/env/policy-gateway.env" /etc/policy-gateway/config.env
+install_config "$ROOT/deploy/env/open-webui.env" /etc/open-webui/config.env
+
+install_venv() {
+  local dest="$1"
+  shift
+  if [[ ! -x "${dest}/venv/bin/pip" ]]; then
+    python3 -m venv "${dest}/venv"
+  fi
+  local stamp digest req
+  digest="$( (cd "$ROOT" && sha256sum "$@") | sha256sum | awk '{ print $1 }')"
+  stamp="${dest}/venv/.requirements-sha256"
+  if [[ -f "$stamp" ]] && [[ "$(<"$stamp")" == "$digest" ]]; then
     return 0
   fi
-  umask 077
-  printf '%s' "$value" >"$dest"
-  chown root:root "$dest"
-  chmod 0600 "$dest"
+  for req in "$@"; do
+    "${dest}/venv/bin/pip" install --require-hashes -r "${ROOT}/${req}"
+  done
+  printf '%s\n' "$digest" >"$stamp"
+  chown -R root:root "${dest}/venv"
 }
 
-write_secret postgres_password "${POSTGRES_PASSWORD:-}"
-write_secret database_url "${DATABASE_URL:-}"
-write_secret audit_database_url "${AUDIT_DATABASE_URL:-}"
-write_secret litellm_master_key "${LITELLM_MASTER_KEY:-}"
-write_secret litellm_virtual_key "${LITELLM_VIRTUAL_KEY:-}"
-write_secret anthropic_api_key "${ANTHROPIC_API_KEY:-}"
-write_secret azure_client_secret "${AZURE_CLIENT_SECRET:-}"
-write_secret webui_secret_key "${WEBUI_SECRET_KEY:-}"
-write_secret microsoft_client_secret "${MICROSOFT_CLIENT_SECRET:-}"
-write_secret cloudflared_credentials.json "${CLOUDFLARED_CREDENTIALS_JSON:-}"
+install_venv /opt/presidio-analyzer requirements/presidio-analyzer.txt requirements/spacy-model.txt
+install_venv /opt/presidio-anonymizer requirements/presidio-anonymizer.txt
+install_venv /opt/litellm requirements/litellm.txt
+install_venv /opt/policy-gateway requirements/policy-gateway.txt
+install_venv /opt/open-webui requirements/open-webui.txt
 
-install -d -m 0755 /etc/docker
-if [[ -f /etc/docker/daemon.json ]] && grep -q 'tcp://' /etc/docker/daemon.json; then
-  echo "refusing to leave a Docker TCP socket configured" >&2
+if [[ "${ALLOW_EMBEDDING_DOWNLOAD:-1}" == "1" ]] && [[ ! -d /var/lib/local-ai-stack/webui/hf/hub ]]; then
+  HF_HOME=/var/lib/local-ai-stack/webui/hf \
+    SENTENCE_TRANSFORMERS_HOME=/var/lib/local-ai-stack/webui/st \
+    /opt/open-webui/venv/bin/python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('sentence-transformers/all-MiniLM-L6-v2')"
+  chown -R openwebui:openwebui /var/lib/local-ai-stack/webui
+fi
+
+bash "$ROOT/deploy/write-secret.sh" /etc/postgres/postgres_password POSTGRES_PASSWORD
+bash "$ROOT/deploy/write-secret.sh" /etc/litellm/litellm_master_key LITELLM_MASTER_KEY
+bash "$ROOT/deploy/write-secret.sh" /etc/litellm/anthropic_api_key ANTHROPIC_API_KEY
+bash "$ROOT/deploy/write-secret.sh" /etc/litellm/azure_client_secret AZURE_CLIENT_SECRET
+bash "$ROOT/deploy/write-secret.sh" /etc/litellm/database_url DATABASE_URL
+bash "$ROOT/deploy/write-secret.sh" /etc/policy-gateway/litellm_virtual_key LITELLM_VIRTUAL_KEY
+bash "$ROOT/deploy/write-secret.sh" /etc/policy-gateway/audit_database_url AUDIT_DATABASE_URL
+bash "$ROOT/deploy/write-secret.sh" /etc/open-webui/webui_secret_key WEBUI_SECRET_KEY
+bash "$ROOT/deploy/write-secret.sh" /etc/open-webui/microsoft_client_secret MICROSOFT_CLIENT_SECRET
+bash "$ROOT/deploy/write-secret.sh" /etc/open-webui/litellm_virtual_key LITELLM_VIRTUAL_KEY
+bash "$ROOT/deploy/write-secret.sh" /etc/cloudflared/credentials.json CLOUDFLARED_CREDENTIALS_JSON
+
+bind_postgres_data() {
+  local dest="/var/lib/local-ai-stack/postgres"
+  local stock="/var/lib/postgresql"
+  install -d -m 0700 "$dest"
+  chown postgres:postgres "$dest"
+  if grep -qF "$dest $stock none bind" /etc/fstab; then
+    if ! mountpoint -q "$stock"; then
+      mount --bind "$dest" "$stock"
+    fi
+    return 0
+  fi
+  systemctl stop postgresql || true
+  if [[ -z "$(ls -A "$dest")" ]] && [[ -n "$(ls -A "$stock" 2>/dev/null || true)" ]]; then
+    cp -a "${stock}/." "$dest/"
+  fi
+  printf '%s\n' "$dest $stock none bind 0 0" >> /etc/fstab
+  mount --bind "$dest" "$stock"
+}
+
+bind_postgres_data
+pg_ver="$(pg_lsclusters --no-header | awk 'NR==1 { print $1 }')"
+install -d -m 0755 "/etc/postgresql/${pg_ver}/main/conf.d"
+printf "%s\n" "listen_addresses = '127.0.0.1'" > "/etc/postgresql/${pg_ver}/main/conf.d/local-ai.conf"
+systemctl enable postgresql
+systemctl restart postgresql
+if [[ -f /etc/postgres/postgres_password ]]; then
+  POSTGRES_PASSWORD="$(< /etc/postgres/postgres_password)"
+  export POSTGRES_PASSWORD
+  export AUDIT_SCHEMA=/opt/local-ai-stack/postgres/init/001-audit.sql
+  sudo --preserve-env=POSTGRES_PASSWORD,AUDIT_SCHEMA -u postgres \
+    /opt/policy-gateway/venv/bin/python /opt/local-ai-stack/scripts/ensure_postgres.py
+  unset POSTGRES_PASSWORD AUDIT_SCHEMA
+fi
+
+install -m 0644 "$ROOT/deploy/systemd/presidio-analyzer.service" /etc/systemd/system/presidio-analyzer.service
+install -m 0644 "$ROOT/deploy/systemd/presidio-anonymizer.service" /etc/systemd/system/presidio-anonymizer.service
+install -m 0644 "$ROOT/deploy/systemd/litellm.service" /etc/systemd/system/litellm.service
+install -m 0644 "$ROOT/deploy/systemd/policy-gateway.service" /etc/systemd/system/policy-gateway.service
+install -m 0644 "$ROOT/deploy/systemd/open-webui.service" /etc/systemd/system/open-webui.service
+install -m 0644 "$ROOT/deploy/systemd/local-ai-stack.target" /etc/systemd/system/local-ai-stack.target
+install -m 0644 "$ROOT/deploy/systemd/local-ai-retention.service" /etc/systemd/system/local-ai-retention.service
+install -m 0644 "$ROOT/deploy/systemd/local-ai-retention.timer" /etc/systemd/system/local-ai-retention.timer
+install -m 0644 "$ROOT/deploy/systemd/cloudflared.service" /etc/systemd/system/cloudflared.service
+install -d -m 0755 /etc/systemd/system/caddy.service.d /etc/systemd/system/postgresql@.service.d
+install -m 0644 "$ROOT/deploy/systemd/caddy.service.d.conf" /etc/systemd/system/caddy.service.d/10-hardening.conf
+install -m 0644 "$ROOT/deploy/systemd/postgresql.service.d.conf" /etc/systemd/system/postgresql@.service.d/10-hardening.conf
+install -m 0644 "$ROOT/deploy/Caddyfile" /etc/caddy/Caddyfile
+install -m 0644 "$ROOT/deploy/cloudflared/config.yml" /etc/cloudflared/config.yml
+install -m 0644 "$ROOT/deploy/ssh/99-local-ai.conf" /etc/ssh/sshd_config.d/99-local-ai.conf
+install -d -m 0755 /etc/systemd/journald.conf.d
+install -m 0644 "$ROOT/deploy/journald/local-ai.conf" /etc/systemd/journald.conf.d/local-ai.conf
+install -d -m 0755 /usr/share/local-ai-stack
+install -m 0644 "$ROOT/deploy/wireguard/wg0.conf.example" /usr/share/local-ai-stack/wg0.conf.example
+
+bind_ip="${VPN_BIND_IP:-127.0.0.1}"
+wildcard="$(printf '%s.%s.%s.%s' 0 0 0 0)"
+if [[ "$bind_ip" == "$wildcard" ]] || [[ ! "$bind_ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+  echo "VPN_BIND_IP must be a loopback or VPN address" >&2
   exit 1
 fi
-cat >/etc/docker/daemon.json <<'EOF'
-{
-  "live-restore": true,
-  "log-driver": "json-file",
-  "log-opts": {"max-size": "10m", "max-file": "5"},
-  "userland-proxy": false
-}
-EOF
+printf '[Service]\nEnvironment=VPN_BIND_IP=%s\n' "$bind_ip" > /etc/systemd/system/caddy.service.d/20-bind.conf
 
-cat >/etc/sysctl.d/99-local-ai.conf <<'EOF'
-net.ipv4.conf.all.rp_filter = 1
-net.ipv4.conf.all.accept_redirects = 0
-net.ipv4.conf.all.send_redirects = 0
-net.ipv4.conf.all.accept_source_route = 0
-net.ipv4.icmp_echo_ignore_broadcasts = 1
-net.ipv4.tcp_syncookies = 1
-EOF
+if [[ -n "${AZURE_API_HOST:-}" ]]; then
+  if [[ ! "$AZURE_API_HOST" =~ ^[A-Za-z0-9.-]+\.openai\.azure\.com$ ]]; then
+    echo "AZURE_API_HOST must be a hostname ending in .openai.azure.com" >&2
+    exit 1
+  fi
+  install -d -m 0755 /etc/systemd/system/litellm.service.d
+  printf '[Service]\nIPAddressAllow=%s\n' "$AZURE_API_HOST" > /etc/systemd/system/litellm.service.d/azure.conf
+fi
+
+install -m 0644 "$ROOT/deploy/sysctl/99-local-ai.conf" /etc/sysctl.d/99-local-ai.conf
 sysctl --system >/dev/null
 
 cat >/etc/apt/apt.conf.d/20auto-upgrades <<'EOF'
@@ -136,25 +244,23 @@ Unattended-Upgrade::Automatic-Reboot "true";
 Unattended-Upgrade::Automatic-Reboot-Time "03:30";
 EOF
 
+if [[ -f /etc/docker/daemon.json ]] && grep -q 'tcp://' /etc/docker/daemon.json; then
+  echo "refusing to leave a Docker TCP socket configured" >&2
+  exit 1
+fi
+
 ufw default deny incoming
 ufw default deny outgoing
+ufw allow in on lo
+ufw allow out on lo
 if [[ -n "${VPN_SSH_CIDR:-}" ]]; then
   ufw allow from "${VPN_SSH_CIDR}" to any port 22 proto tcp
+  ufw allow from "${VPN_SSH_CIDR}" to any port 443 proto tcp
 fi
-while IFS= read -r line; do
-  if [[ "$line" =~ ^allow\ out\ to\ ([^[:space:]]+)\ port\ ([0-9]+)\ proto\ (tcp|udp)$ ]]; then
-    ufw allow out to "${BASH_REMATCH[1]}" port "${BASH_REMATCH[2]}" proto "${BASH_REMATCH[3]}"
-  fi
-done <"$ROOT/deploy/ufw/user.rules"
-if [[ -n "${AZURE_API_HOST:-}" ]]; then
-  ufw allow out to "${AZURE_API_HOST}" port 443 proto tcp
+if [[ -n "${WIREGUARD_LISTEN_PORT:-}" ]]; then
+  ufw allow "${WIREGUARD_LISTEN_PORT}/udp"
 fi
-if [[ -n "${DNS_SERVERS:-}" ]]; then
-  ufw allow out to "${DNS_SERVERS}" port 53 proto udp
-fi
-if [[ -n "${SIEM_HOST:-}" && -n "${SIEM_PORT:-}" ]]; then
-  ufw allow out to "${SIEM_HOST}" port "${SIEM_PORT}" proto tcp
-fi
+python3 "$ROOT/scripts/egress_owners.py" --apply-ufw --dest "$ROOT/deploy/egress-destinations.yaml"
 ufw --force enable
 
 if [[ ! -f /var/lib/local-ai-stack/certs/webui.key ]]; then
@@ -166,20 +272,28 @@ if [[ ! -f /var/lib/local-ai-stack/certs/webui.key ]]; then
   chmod 0600 /var/lib/local-ai-stack/certs/webui.key
 fi
 
-install -m 0644 "$ROOT/deploy/ssh/99-local-ai.conf" /etc/ssh/sshd_config.d/99-local-ai.conf
 if [[ "${APPLY_SSH_HARDENING:-0}" == "1" ]]; then
   systemctl reload ssh || systemctl reload sshd
 fi
 
-install -m 0644 "$ROOT/deploy/systemd/local-ai-stack.service" /etc/systemd/system/local-ai-stack.service
-install -m 0644 "$ROOT/deploy/systemd/local-ai-retention.service" /etc/systemd/system/local-ai-retention.service
-install -m 0644 "$ROOT/deploy/systemd/local-ai-retention.timer" /etc/systemd/system/local-ai-retention.timer
-install -m 0644 "$ROOT/deploy/systemd/cloudflared.service" /etc/systemd/system/cloudflared.service
 systemctl daemon-reload
-systemctl enable local-ai-stack.service
+systemctl enable postgresql.service
+systemctl enable presidio-analyzer.service
+systemctl enable presidio-anonymizer.service
+systemctl enable litellm.service
+systemctl enable policy-gateway.service
+systemctl enable open-webui.service
+systemctl enable caddy.service
+systemctl enable local-ai-stack.target
 systemctl enable --now local-ai-retention.timer
 systemctl disable --now cloudflared.service || true
+if [[ -f /etc/wireguard/wg0.conf ]]; then
+  systemctl enable wg-quick@wg0.service
+else
+  systemctl disable wg-quick@wg0.service || true
+fi
 systemctl enable systemd-timesyncd
+systemctl restart systemd-journald || true
 systemctl enable auditd || true
 
-echo "install complete; stack unit is enabled and cloudflared is disabled"
+echo "install complete; native units are enabled and cloudflared is disabled"

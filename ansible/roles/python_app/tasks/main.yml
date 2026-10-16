@@ -1,0 +1,43 @@
+---
+- name: system user {{ app_user }}
+  ansible.builtin.user:
+    name: "{{ app_user }}"
+    system: true
+    shell: /usr/sbin/nologin
+    create_home: false
+    home: "{{ app_data }}"
+
+- name: directories for {{ app_user }}
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    mode: "{{ item.mode }}"
+    owner: "{{ item.owner }}"
+    group: "{{ item.group }}"
+  loop:
+    - {path: "{{ app_opt }}", mode: "0755", owner: root, group: root}
+    - {path: "{{ app_data }}", mode: "0700", owner: "{{ app_user }}", group: "{{ app_user }}"}
+    - {path: "{{ app_etc }}", mode: "0700", owner: root, group: root}
+
+- name: venv for {{ app_opt }}
+  ansible.builtin.command: python3 -m venv {{ app_opt }}/venv
+  args:
+    creates: "{{ app_opt }}/venv/bin/python"
+
+- name: hashed requirements for {{ app_opt }}
+  ansible.builtin.command: "{{ app_opt }}/venv/bin/pip install --require-hashes -r {{ repo_root }}/{{ item }}"
+  loop: "{{ app_requirements }}"
+  changed_when: false
+
+- name: unit {{ app_unit }}
+  ansible.builtin.copy:
+    src: "{{ repo_root }}/deploy/systemd/{{ app_unit }}"
+    dest: "/etc/systemd/system/{{ app_unit }}"
+    mode: "0644"
+  notify: Reload systemd
+
+- name: enable {{ app_unit }}
+  ansible.builtin.systemd:
+    name: "{{ app_unit }}"
+    enabled: true
+    daemon_reload: true

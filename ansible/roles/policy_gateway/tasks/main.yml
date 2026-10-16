@@ -1,0 +1,12 @@
+---
+- name: policy gateway
+  ansible.builtin.include_role:
+    name: python_app
+  vars:
+    app_user: policy-gateway
+    app_opt: /opt/policy-gateway
+    app_data: /var/lib/local-ai-stack/policy-gateway
+    app_etc: /etc/policy-gateway
+    app_unit: policy-gateway.service
+    app_requirements:
+      - requirements/policy-gateway.txt
