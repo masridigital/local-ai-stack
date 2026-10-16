@@ -10,6 +10,7 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-24.04
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -21,20 +22,26 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y nftables
-          pip install -r requirements-dev.txt
+          python -m pip install --require-hashes -r requirements-dev.txt
+      - name: install pinned presidio
+        run: |
+          python -m pip install --require-hashes \
+            -r requirements/presidio-anonymizer.txt \
+            -r requirements/presidio-analyzer.txt \
+            -r requirements/spacy-model.txt
       - name: pytest
         run: pytest
       - name: shellcheck
         run: |
           sudo apt-get update
           sudo apt-get install -y shellcheck
-          shellcheck deploy/install.sh deploy/apt-repos.sh deploy/caddy-key.sh deploy/write-secret.sh deploy/litellm-run.sh deploy/open-webui-run.sh deploy/break-glass-enable.sh deploy/litellm-baa-dropin.sh deploy/egress-refresh.sh deploy/check-password-login.sh deploy/health-check.sh host/install.sh host/ufw.sh host/luks-data.sh host/secrets/populate.sh
+          shellcheck deploy/install.sh deploy/apt-repos.sh deploy/caddy-key.sh deploy/write-secret.sh deploy/litellm-run.sh deploy/open-webui-run.sh deploy/break-glass-enable.sh deploy/litellm-baa-dropin.sh deploy/egress-refresh.sh deploy/check-password-login.sh deploy/health-check.sh host/install.sh host/ufw.sh host/luks-data.sh host/secrets/populate.sh scripts/install_gitleaks.sh
       - name: bandit
         run: bandit -r stack scripts -q -ll
       - name: gitleaks
-        uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7 # v2
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          bash scripts/install_gitleaks.sh "$RUNNER_TEMP/gitleaks"
+          "$RUNNER_TEMP/gitleaks" detect --source . --redact --verbose --config .gitleaks.toml
       - name: sbom
         run: python scripts/generate_sbom.py sbom.cdx.json
       - name: trivy filesystem
