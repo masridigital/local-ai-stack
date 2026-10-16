@@ -278,6 +278,15 @@ def test_password_login_check_requires_sshd_and_webui_refusal(tmp_path):
         )
         assert allowed.returncode == 1
         assert "password login was not refused" in allowed.stderr
+        Signin.code = 400
+        invalid = subprocess.run(
+            ["bash", script, "--sshd-text", str(sshd), "--webui", url],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        assert invalid.returncode == 1
+        assert "password login returned 400, expected 403" in invalid.stderr
     finally:
         server.shutdown()
         server.server_close()
@@ -292,25 +301,46 @@ def test_password_login_check_requires_sshd_and_webui_refusal(tmp_path):
     assert "password login is not refused" in opened.stderr
 
 
-def test_admin_role_evidence_omits_tokens(tmp_path):
+def test_admin_role_evidence_matches_object_id_and_omits_tokens(tmp_path):
     from scripts.capture_admin_role import build_evidence
 
+    group_id = "11111111-2222-3333-4444-555555555555"
     assignments = {
+        "value": [
+            {
+                "principalDisplayName": "someone-else",
+                "principalId": group_id.upper(),
+                "principalType": "Group",
+                "appRoleId": "role-admin",
+                "accessToken": "should-not-leak",
+            },
+            {
+                "principalDisplayName": "local-ai-admins",
+                "principalId": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+                "principalType": "Group",
+                "appRoleId": "role-admin",
+            },
+        ]
+    }
+    roles = [{"id": "role-admin", "value": "admin"}, {"id": "role-phi", "value": "phi"}]
+    evidence = build_evidence(assignments, roles, group_id)
+    assert evidence["assigned"] is True
+    assert evidence["group"] == "local-ai-admins"
+    assert evidence["group_id"] == group_id
+    assert evidence["principal_count"] == 1
+    dumped = json.dumps(evidence)
+    assert "should-not-leak" not in dumped
+    assert "principalDisplayName" not in dumped
+    display_only = {
         "value": [
             {
                 "principalDisplayName": "local-ai-admins",
                 "principalType": "Group",
                 "appRoleId": "role-admin",
-                "accessToken": "should-not-leak",
             }
         ]
     }
-    roles = [{"id": "role-admin", "value": "admin"}, {"id": "role-phi", "value": "phi"}]
-    evidence = build_evidence(assignments, roles)
-    assert evidence["assigned"] is True
-    assert evidence["group"] == "local-ai-admins"
-    assert evidence["principal_count"] == 1
-    assert "should-not-leak" not in json.dumps(evidence)
+    assert build_evidence(display_only, roles, group_id)["assigned"] is False
     assignment_path = tmp_path / "assignments.json"
     role_path = tmp_path / "roles.json"
     output = tmp_path / "evidence" / "local-ai-admins-role.json"
@@ -320,6 +350,8 @@ def test_admin_role_evidence_omits_tokens(tmp_path):
         [
             "python3",
             str(ROOT / "scripts" / "capture_admin_role.py"),
+            "--group-id",
+            group_id,
             "--assignments",
             str(assignment_path),
             "--app-roles",
@@ -334,13 +366,35 @@ def test_admin_role_evidence_omits_tokens(tmp_path):
     assert captured.returncode == 0, captured.stderr
     saved = json.loads(output.read_text(encoding="utf-8"))
     assert saved["assigned"] is True
+    assert saved["group_id"] == group_id
     assert output.stat().st_mode & 0o777 == 0o600
+    named = subprocess.run(
+        [
+            "python3",
+            str(ROOT / "scripts" / "capture_admin_role.py"),
+            "--group-id",
+            "local-ai-admins",
+            "--assignments",
+            str(assignment_path),
+            "--app-roles",
+            str(role_path),
+            "--output",
+            str(tmp_path / "named.json"),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert named.returncode == 2
+    assert "object id" in named.stderr
     roles_only = tmp_path / "phi.json"
     roles_only.write_text(json.dumps([{"id": "role-phi", "value": "phi"}]), encoding="utf-8")
     missing = subprocess.run(
         [
             "python3",
             str(ROOT / "scripts" / "capture_admin_role.py"),
+            "--group-id",
+            group_id,
             "--assignments",
             str(assignment_path),
             "--app-roles",
@@ -354,6 +408,9 @@ def test_admin_role_evidence_omits_tokens(tmp_path):
     )
     assert missing.returncode == 1
     assert "not-assigned" in missing.stdout
+    checklist = (ROOT / "docs" / "deploy-checklist.md").read_text(encoding="utf-8")
+    assert "run the bootstrap-retire job once with `--require`" in checklist
+    assert "HTTP 400 does not count" in checklist
 
 
 def test_gateway_health_check_runs_as_openwebui():

@@ -62,6 +62,10 @@ if [[ "$code" == "000" ]]; then
   echo "open webui did not answer the password login check" >&2
   exit 1
 fi
+if [[ "$code" == "400" ]]; then
+  echo "password login returned 400, expected 403" >&2
+  exit 1
+fi
 if [[ "$code" != "403" ]]; then
   echo "password login was not refused" >&2
   exit 1

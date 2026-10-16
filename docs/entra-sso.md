@@ -26,7 +26,7 @@ Tools and Functions are admin-only. `USER_PERMISSIONS_WORKSPACE_TOOLS_ACCESS`, i
 
 Open WebUI promotes the sole user to admin. A bootstrap account is created at startup from `WEBUI_ADMIN_EMAIL=webui-bootstrap@local-ai.internal` and `WEBUI_ADMIN_PASSWORD` (LoadCredential, mode 0600, generated, not in git). The password form is off, and `OAUTH_MERGE_ACCOUNTS_BY_EMAIL=false`, so that account is not a sign-in path and the first Entra login is not an admin. Human admins come from the Entra app role `admin`.
 
-`local-ai-retire-bootstrap.timer` runs `scripts/retire_bootstrap_admin.py` daily. Once a user with role `admin` and an Entra `oauth` record exists, the script sets the bootstrap row to `pending`, clears the `auth.password` hash, and truncates `/etc/open-webui/webui_admin_password`. The empty file stays so systemd can still load the credential. `open-webui-run.sh` does not export an empty password, so a restart does not recreate the hash.
+`local-ai-retire-bootstrap.timer` runs `scripts/retire_bootstrap_admin.py` daily without `--require`, so a host that does not yet have an Entra admin stays up. After the first Entra admin has signed in, run that bootstrap-retire job once with `--require`: `python3 /opt/local-ai-stack/scripts/retire_bootstrap_admin.py --db /var/lib/local-ai-stack/webui/webui.db --password-file /etc/open-webui/webui_admin_password --require`. It must print `retired`. The script sets the bootstrap row to `pending`, clears the `auth.password` hash, and truncates `/etc/open-webui/webui_admin_password`. The empty file stays so systemd can still load the credential. `open-webui-run.sh` does not export an empty password, so a restart does not recreate the hash.
 
 The same `roles` claim is copied into Open WebUI groups (`OAUTH_GROUPS_CLAIM=roles`). Open WebUI 0.12.2 replaces `{{USER_GROUPS}}` in `OPENAI_API_CONFIGS` with the comma-separated group names (`parse_custom_headers` in `backend/open_webui/utils/headers.py`). A comma is left as a comma, so the gateway receives `X-Entra-App-Roles: phi` or `phi,non-phi`. `phi` may call the PHI models. `non-phi` may call Haiku only.
 
@@ -48,11 +48,11 @@ LiteLLM authenticates to Azure OpenAI with `AZURE_API_KEY` from `/etc/litellm/az
 
 Before PHI, capture the `local-ai-admins` app role assignment. Download the service principal’s `appRoleAssignedTo` list and the app registration’s `appRoles`, then run:
 
-`python3 scripts/capture_admin_role.py --assignments appRoleAssignedTo.json --app-roles appRoles.json --output /var/lib/local-ai-stack/evidence/local-ai-admins-role.json`
+`python3 scripts/capture_admin_role.py --group-id <object-id> --assignments appRoleAssignedTo.json --app-roles appRoles.json --output /var/lib/local-ai-stack/evidence/local-ai-admins-role.json`
 
-The evidence file records the group name, the role value `admin`, the assignment count, and the time. It does not contain a token. The command exits non-zero when that group does not hold `admin`.
+`<object-id>` is the Entra object id of the `local-ai-admins` group. The script counts a row only when `principalId` is that object id, `principalType` is `Group`, and `appRoleId` is the `admin` role. `principalDisplayName` is ignored. The evidence file records the group name, that object id, the role value `admin`, the assignment count, and the time. It does not contain a token. The command exits non-zero when that object id does not hold `admin`.
 
-`deploy/check-password-login.sh --live` confirms `sshd -T` reports `passwordauthentication no` and that Open WebUI’s `/api/v1/auths/signin` answers HTTP 403.
+`deploy/check-password-login.sh --live` confirms `sshd -T` reports `passwordauthentication no` and that Open WebUI’s `/api/v1/auths/signin` answers HTTP 403. HTTP 400 is a failed check.
 
 LiteLLM teams `phi` and `non-phi` must exist before it honors `x-litellm-team-id`. The gateway still enforces the model list when LiteLLM ignores that header. `enable_jwt_auth` stays off so the virtual key remains the credential.
 
