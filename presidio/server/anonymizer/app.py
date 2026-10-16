@@ -1,11 +1,14 @@
 """REST API server for anonymizer.
 
 Vendored from microsoft/presidio tag 2.2.362 (MIT).
-Local changes: bind 127.0.0.1 unless BIND_HOST is set, refuse a wildcard bind,
-and keep werkzeug access logs at ERROR.
+Local changes: bind 127.0.0.1 unless BIND_HOST is set, refuse a wildcard bind
+including IPv6 ``::``, keep werkzeug access logs at ERROR, and return a
+generic error body. The process is started by gunicorn, not Flask's
+development server.
 """
 import logging
 import os
+import uuid
 from logging.config import fileConfig
 from pathlib import Path
 
@@ -102,33 +105,38 @@ class Server:
 
         @self.app.errorhandler(InvalidParamError)
         def invalid_param(err):
-            self.logger.warning(
-                f"Request failed with parameter validation error: {err.err_msg}"
-            )
-            return jsonify(error=err.err_msg), 422
+            return jsonify(_failure(self.logger, err)), 422
 
         @self.app.errorhandler(HTTPException)
         def http_exception(e):
-            return jsonify(error=e.description), e.code
+            return jsonify(_failure(self.logger, e)), e.code
 
         @self.app.errorhandler(Exception)
         def server_error(e):
-            self.logger.error(f"A fatal error occurred during execution: {e}")
-            return jsonify(error="Internal server error"), 500
+            return jsonify(_failure(self.logger, e)), 500
 
 def create_app(): # noqa
     server = Server()
     logging.getLogger("werkzeug").setLevel(logging.ERROR)
     return server.app
 
+def _failure(logger: logging.Logger, exc: BaseException) -> dict:
+    """Log the class name and a request id. Never log or return exc text."""
+    request_id = uuid.uuid4().hex
+    logger.error("request failed request_id=%s exception=%s", request_id, type(exc).__name__)
+    return {"error": "request failed", "request_id": request_id}
+
+
 def _bind_host() -> str:
-    host = os.environ.get("BIND_HOST", "127.0.0.1")
-    if not host or host.startswith("0."):
+    host = os.environ.get("BIND_HOST", "127.0.0.1").strip()
+    if not host or host.startswith("0.") or host.startswith("::") or host.startswith("[::"):
         raise SystemExit("refusing wildcard bind")
     return host
 
 
+def main() -> None:
+    raise SystemExit("refusing the Flask development server; use the gunicorn unit")
+
+
 if __name__ == "__main__":
-    app = create_app()
-    port = int(os.environ.get("PORT", DEFAULT_PORT))
-    app.run(host=_bind_host(), port=port)
+    main()

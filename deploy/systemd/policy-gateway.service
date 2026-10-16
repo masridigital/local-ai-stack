@@ -18,11 +18,18 @@ Environment=POLICY_PATH=/opt/policy-gateway/litellm/policy.yaml
 Environment=RECOGNIZER_DIR=/opt/policy-gateway/presidio/recognizers
 Environment=PRESIDIO_ANALYZER_API_BASE=http://127.0.0.1:3000
 Environment=PRESIDIO_ANONYMIZER_API_BASE=http://127.0.0.1:3001
-Environment=LITELLM_BASE_URL=http://127.0.0.1:4000
+Environment=LITELLM_BASE_URL=http://127.0.0.2:4000
+Environment=http_proxy=http://127.0.0.1:8891
+Environment=https_proxy=http://127.0.0.1:8891
+Environment=HTTP_PROXY=http://127.0.0.1:8891
+Environment=HTTPS_PROXY=http://127.0.0.1:8891
+Environment=NO_PROXY=127.0.0.1,127.0.0.2,localhost
 LoadCredential=litellm_virtual_key:/etc/policy-gateway/litellm_virtual_key
 LoadCredential=audit_database_url:/etc/policy-gateway/audit_database_url
+LoadCredential=gateway_client_key:/etc/policy-gateway/gateway_client_key
 Environment=LITELLM_API_KEY_FILE=%d/litellm_virtual_key
 Environment=AUDIT_DATABASE_URL_FILE=%d/audit_database_url
+Environment=GATEWAY_CLIENT_KEY_FILE=%d/gateway_client_key
 ExecStart=/opt/policy-gateway/venv/bin/python -m stack.server
 Restart=on-failure
 RestartSec=5
@@ -41,7 +48,8 @@ CapabilityBoundingSet=
 UMask=0077
 ReadWritePaths=/var/lib/local-ai-stack/policy-gateway
 IPAddressDeny=any
-IPAddressAllow=localhost
+IPAddressAllow=127.0.0.1
+IPAddressAllow=127.0.0.2
 
 [Install]
 WantedBy=local-ai-stack.target

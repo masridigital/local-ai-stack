@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Break-glass admin enablement. Password is read from a root-owned file, never argv.
+# Break-glass check. This does not enable a password login.
+# The secret stays in the file. It is never printed and never passed as an argument.
 set -euo pipefail
 
 if [[ "$#" -ne 0 ]]; then
@@ -23,4 +24,9 @@ if [[ "${mode}" != "600" ]]; then
   exit 2
 fi
 
-echo "break-glass file accepted; rotate the credential after use and record the event in the audit log" >&2
+if [[ -n "${BREAK_GLASS_AUDIT_LOG:-}" ]]; then
+  printf '%s break-glass checked; password login was not enabled\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >>"${BREAK_GLASS_AUDIT_LOG}"
+fi
+
+echo "break-glass does not enable login; ENABLE_LOGIN_FORM stays false" >&2
+exit 1

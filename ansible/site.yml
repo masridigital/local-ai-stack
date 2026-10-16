@@ -15,6 +15,5 @@
     - open_webui
     - caddy
     - wireguard
-    - cloudflared
     - firewall
     - retention

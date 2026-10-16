@@ -33,14 +33,14 @@ apps:
     requirements:
       - requirements/litellm.txt
     unit: litellm.service
-    bind: 127.0.0.1
+    bind: 127.0.0.2
     port: 4000
     data_dir: /var/lib/local-ai-stack/litellm
     config_dir: /etc/litellm
     credentials:
       - litellm_master_key
       - anthropic_api_key
-      - azure_client_secret
+      - azure_api_key
       - database_url
   - name: policy-gateway
     user: policy-gateway
@@ -55,6 +55,7 @@ apps:
     credentials:
       - litellm_virtual_key
       - audit_database_url
+      - gateway_client_key
   - name: open-webui
     user: openwebui
     opt: /opt/open-webui
@@ -67,8 +68,9 @@ apps:
     config_dir: /etc/open-webui
     credentials:
       - webui_secret_key
+      - webui_admin_password
       - microsoft_client_secret
-      - litellm_virtual_key
+      - gateway_client_key
 apt_packages:
   - python3
   - python3-venv
@@ -88,4 +90,3 @@ apt_packages:
   - gnupg
   - wireguard
   - caddy
-  - cloudflared

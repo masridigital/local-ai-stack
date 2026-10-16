@@ -1,0 +1,10 @@
+[Unit]
+Description=Re-resolve local-ai egress addresses
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+Environment=LOCAL_AI_ROOT=@LOCAL_AI_ROOT@
+EnvironmentFile=-/etc/local-ai-stack/egress.env
+ExecStart=/usr/local/sbin/local-ai-egress-refresh

@@ -1,9 +1,7 @@
-# Host allowlist. install.sh installs these as owner-matched OUTPUT rules, not global allows.
-# Optional hosts are added only when their env var is set. cloudflared stays off.
+# FQDN allowlist for the local egress proxy. These are not global firewall allows.
+# Optional hosts are added only when their env var is set. cloudflared is not installed.
 default deny incoming
 default deny outgoing
-# user litellm
-allow out to api.anthropic.com port 443 proto tcp
 # user openwebui
 allow out to login.microsoftonline.com port 443 proto tcp
 allow out to login.microsoft.com port 443 proto tcp
@@ -13,18 +11,6 @@ allow out to archive.ubuntu.com port 443 proto tcp
 allow out to security.ubuntu.com port 80 proto tcp
 allow out to security.ubuntu.com port 443 proto tcp
 # user root
-allow out to pypi.org port 443 proto tcp
-allow out to files.pythonhosted.org port 443 proto tcp
-# user root
 allow out to dl.cloudsmith.io port 443 proto tcp
-# user root
-allow out to pkg.cloudflare.com port 443 proto tcp
-# user root
-allow out to github.com port 443 proto tcp
-allow out to release-assets.githubusercontent.com port 443 proto tcp
-# user root
-allow out to huggingface.co port 443 proto tcp
-allow out to cdn-lfs.huggingface.co port 443 proto tcp
-allow out to cas-bridge.xethub.hf.co port 443 proto tcp
 # user systemd-timesync
-allow out to time.cloudflare.com port 123 proto udp
+allow out to ntp.ubuntu.com port 123 proto udp

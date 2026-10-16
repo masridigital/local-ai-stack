@@ -1,0 +1,19 @@
+[Unit]
+Description=Purge aged audit rows and LiteLLM spend logs
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+NoNewPrivileges=yes
+ProtectSystem=strict
+PrivateTmp=yes
+ProtectHome=yes
+CapabilityBoundingSet=
+ReadOnlyPaths=/etc/policy-gateway /etc/litellm /opt/policy-gateway
+IPAddressDeny=any
+IPAddressAllow=127.0.0.1
+ExecStart=/opt/policy-gateway/venv/bin/python /opt/policy-gateway/stack/store_purge.py --audit-dsn-file /etc/policy-gateway/audit_database_url --spend-dsn-file /etc/litellm/database_url
+
+[Install]
+WantedBy=multi-user.target

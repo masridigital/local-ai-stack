@@ -1,0 +1,10 @@
+[Unit]
+Description=Daily purge of aged audit rows and LiteLLM spend logs
+
+[Timer]
+OnCalendar=daily
+Persistent=true
+Unit=local-ai-store-purge.service
+
+[Install]
+WantedBy=timers.target

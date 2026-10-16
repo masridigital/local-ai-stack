@@ -1,0 +1,12 @@
+[Unit]
+Description=Re-resolve local-ai egress addresses
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+AccuracySec=30s
+Persistent=true
+Unit=local-ai-egress-refresh.service
+
+[Install]
+WantedBy=timers.target

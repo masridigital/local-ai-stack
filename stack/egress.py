@@ -2,9 +2,32 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import yaml
+
+# Served by the runtime forward proxy. Everything else stays off that proxy.
+RUNTIME_PROXY_USERS = ("openwebui", "litellm")
+# Apt package hosts use the apt listener. SIEM, DNS, NTP, and MCP stay off the runtime ports.
+RUNTIME_PROXY_EXCLUDED = frozenset(
+    {
+        "ubuntu-updates",
+        "pypi",
+        "caddy-apt",
+        "spacy-model",
+        "embedding-model",
+        "ntp",
+        "dns",
+        "siem",
+        "stackjack",
+        "composio",
+    }
+)
+# Hostnames the apt listener may dial, and only on the ports each row lists.
+APT_DESTINATIONS = frozenset({"ubuntu-updates", "pypi", "caddy-apt", "spacy-model", "embedding-model"})
+MCP_DESTINATIONS = frozenset({"stackjack", "composio"})
+AZURE_SUFFIX = ".openai.azure.com"
 
 
 def load_destinations(path: Path) -> dict:
@@ -14,35 +37,125 @@ def load_destinations(path: Path) -> dict:
     return raw
 
 
+def destination_active(item: dict, env: dict[str, str]) -> bool:
+    """A row is live only when its flag, optional host, and install-time gate say so."""
+    if item.get("enabled", True) is False:
+        return False
+    if item.get("install_only") and env.get("INSTALL_EGRESS", "") != "1":
+        return False
+    if item.get("optional") and item.get("env"):
+        value = env.get(item["env"], "")
+        expected = item.get("env_value")
+        if expected is not None:
+            return value == expected
+        return bool(value)
+    return True
+
+
 def allowed_hosts(raw: dict, env: dict[str, str]) -> list[str]:
     hosts: list[str] = []
     for item in raw["destinations"]:
-        if item.get("enabled", True) is False:
+        if not destination_active(item, env):
             continue
-        if item.get("optional") and not env.get(item.get("env", ""), ""):
-            # Optional rows with static hosts stay disabled unless enabled: true.
-            if "hosts" in item and item.get("optional"):
-                continue
         hosts.extend(item.get("hosts") or [])
+        if item.get("env_value"):
+            continue
         env_name = item.get("env")
         if env_name and env.get(env_name):
             hosts.append(env[env_name])
     return hosts
 
 
-def host_allowed(host: str, raw: dict, env: dict[str, str]) -> bool:
+def us_regions(policy_path: Path | None = None) -> tuple[str, ...]:
+    path = policy_path or Path(__file__).resolve().parents[1] / "litellm" / "policy.yaml"
+    document = yaml.safe_load(path.read_text(encoding="utf-8"))
+    return tuple(document["foundry"]["allowed_regions"])
+
+
+def azure_host_ok(host: str, regions: tuple[str, ...] | None = None) -> bool:
+    """One label, no dot-dot, and a US region token from the Foundry allowlist."""
+    name = host.strip().lower().rstrip(".")
+    if not name or ".." in name or not name.endswith(AZURE_SUFFIX):
+        return False
+    label = name[: -len(AZURE_SUFFIX)]
+    if "." in label or not re.fullmatch(r"[a-z0-9-]+", label):
+        return False
+    allowed = regions if regions is not None else us_regions()
+    return any(part in allowed for part in label.split("-"))
+
+
+def _row_matches(host: str, item: dict, env: dict[str, str]) -> bool:
+    for listed in item.get("hosts") or []:
+        if host == listed.lower():
+            return True
+    if item.get("env_value"):
+        return False
+    env_name = item.get("env")
+    configured = env.get(env_name, "").strip().lower().rstrip(".") if env_name else ""
+    if not configured or host != configured:
+        return False
+    if item.get("name") == "azure-openai" or item.get("host_suffix") == AZURE_SUFFIX:
+        return azure_host_ok(configured)
+    suffix = item.get("host_suffix")
+    if suffix and not host.endswith(suffix.lower()):
+        return False
+    return True
+
+
+def host_allowed(host: str, raw: dict, env: dict[str, str], user: str | None = None) -> bool:
+    """Active row match. Pass user to require that row's users list."""
     host = host.lower().rstrip(".")
     for item in raw["destinations"]:
-        if item.get("enabled", True) is False:
+        if not destination_active(item, env):
             continue
-        for listed in item.get("hosts") or []:
-            if host == listed.lower():
-                return True
-        env_name = item.get("env")
-        configured = env.get(env_name, "").lower() if env_name else ""
-        if configured and host == configured:
-            suffix = item.get("host_suffix")
-            if suffix and not host.endswith(suffix.lower()):
-                return False
+        if user is not None and user not in item.get("users", []):
+            continue
+        if _row_matches(host, item, env):
+            return True
+    return False
+
+
+def destination_ports(item: dict) -> set[int]:
+    if "ports" in item:
+        return {int(port) for port in item["ports"]}
+    if item.get("port") is not None:
+        return {int(item["port"])}
+    return set()
+
+
+def host_on_named_destination(
+    host: str,
+    port: int,
+    raw: dict,
+    env: dict[str, str],
+    names: frozenset[str],
+) -> bool:
+    """Active named row whose port list includes this port."""
+    host = host.lower().rstrip(".")
+    for item in raw["destinations"]:
+        if item.get("name") not in names:
+            continue
+        if not destination_active(item, env):
+            continue
+        if port not in destination_ports(item):
+            continue
+        if _row_matches(host, item, env):
+            return True
+    return False
+
+
+def proxy_host_allowed(host: str, user: str, raw: dict, env: dict[str, str]) -> bool:
+    """Runtime proxy allowlist for one service. Apt, SIEM, and MCP are excluded."""
+    if user not in RUNTIME_PROXY_USERS:
+        return False
+    host = host.lower().rstrip(".")
+    for item in raw["destinations"]:
+        if item.get("name") in RUNTIME_PROXY_EXCLUDED:
+            continue
+        if not destination_active(item, env):
+            continue
+        if user not in item.get("users", []):
+            continue
+        if _row_matches(host, item, env):
             return True
     return False

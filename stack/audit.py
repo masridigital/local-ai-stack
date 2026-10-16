@@ -33,6 +33,7 @@ class AuditLog:
                     id TEXT PRIMARY KEY,
                     ts TEXT NOT NULL,
                     user_id TEXT,
+                    user_email TEXT,
                     event_type TEXT NOT NULL,
                     route TEXT,
                     backend TEXT,
@@ -46,6 +47,9 @@ class AuditLog:
                 )
                 """
             )
+            columns = {row[1] for row in conn.execute("PRAGMA table_info(audit_event)")}
+            if "user_email" not in columns:
+                conn.execute("ALTER TABLE audit_event ADD COLUMN user_email TEXT")
 
     def write(self, **kwargs) -> dict:
         row = sanitize_row(kwargs, self.recognizers, self.threshold)
@@ -53,10 +57,10 @@ class AuditLog:
             conn.execute(
                 """
                 INSERT INTO audit_event (
-                    id, ts, user_id, event_type, route, backend, model, decision,
+                    id, ts, user_id, user_email, event_type, route, backend, model, decision,
                     reason, entity_types, prompt_redacted, response_redacted, config_hash
                 ) VALUES (
-                    :id, :ts, :user_id, :event_type, :route, :backend, :model, :decision,
+                    :id, :ts, :user_id, :user_email, :event_type, :route, :backend, :model, :decision,
                     :reason, :entity_types, :prompt_redacted, :response_redacted, :config_hash
                 )
                 """,
@@ -75,6 +79,7 @@ def sanitize_row(kwargs: dict, recognizers: list[Recognizer], threshold: float) 
         "id": str(uuid.uuid4()),
         "ts": datetime.now(timezone.utc).isoformat(),
         "user_id": kwargs.get("user_id"),
+        "user_email": kwargs.get("user_email"),
         "event_type": kwargs["event_type"],
         "route": kwargs.get("route"),
         "backend": kwargs.get("backend"),
@@ -86,11 +91,15 @@ def sanitize_row(kwargs: dict, recognizers: list[Recognizer], threshold: float) 
         "response_redacted": kwargs.get("response_redacted"),
         "config_hash": kwargs.get("config_hash"),
     }
-    if contains_raw_phi(json.dumps(row), recognizers, threshold):
+    # user_id and user_email are the Entra id and mail Open WebUI asserts.
+    # They are not prompt text, so a mailbox there does not suppress the row.
+    scanned = {key: value for key, value in row.items() if key not in {"user_id", "user_email"}}
+    if contains_raw_phi(json.dumps(scanned), recognizers, threshold):
         row["prompt_redacted"] = "[suppressed]"
         row["response_redacted"] = "[suppressed]"
         row["decision"] = "suppressed_raw_phi"
-        if contains_raw_phi(json.dumps(row), recognizers, threshold):
+        scanned = {key: value for key, value in row.items() if key not in {"user_id", "user_email"}}
+        if contains_raw_phi(json.dumps(scanned), recognizers, threshold):
             raise PolicyError("audit_phi", "refusing to persist raw PHI", status=500)
     return row
 
@@ -111,10 +120,10 @@ class PostgresAudit:
             conn.execute(
                 """
                 INSERT INTO audit_event (
-                    id, ts, user_id, event_type, route, backend, model, decision,
+                    id, ts, user_id, user_email, event_type, route, backend, model, decision,
                     reason, entity_types, prompt_redacted, response_redacted, config_hash
                 ) VALUES (
-                    %(id)s, %(ts)s, %(user_id)s, %(event_type)s, %(route)s, %(backend)s,
+                    %(id)s, %(ts)s, %(user_id)s, %(user_email)s, %(event_type)s, %(route)s, %(backend)s,
                     %(model)s, %(decision)s, %(reason)s, %(entity_types)s,
                     %(prompt_redacted)s, %(response_redacted)s, %(config_hash)s
                 )

@@ -1,12 +1,14 @@
 default: deny
-cloudflared_enabled: false
 destinations:
   - name: anthropic-api
     users: [litellm]
     hosts: [api.anthropic.com]
     port: 443
     proto: tcp
-    purpose: Anthropic Claude API under Cap's BAA, including ZDR
+    optional: true
+    env: ANTHROPIC_BAA_ENABLED
+    env_value: "true"
+    purpose: Anthropic Claude API under Cap's BAA, including ZDR. Omitted unless the switch is on.
   - name: entra
     users: [openwebui]
     hosts:
@@ -30,19 +32,14 @@ destinations:
       - files.pythonhosted.org
     port: 443
     proto: tcp
-    purpose: hashed pip installs during apply, as root
+    install_only: true
+    purpose: hashed pip installs during apply, as root. Dropped after install.
   - name: caddy-apt
     users: [root]
     hosts: [dl.cloudsmith.io]
     port: 443
     proto: tcp
     purpose: Caddy apt repository
-  - name: cloudflared-apt
-    users: [root]
-    hosts: [pkg.cloudflare.com]
-    port: 443
-    proto: tcp
-    purpose: cloudflared apt repository, not the tunnel
   - name: spacy-model
     users: [root]
     hosts:
@@ -50,7 +47,8 @@ destinations:
       - release-assets.githubusercontent.com
     port: 443
     proto: tcp
-    purpose: pinned en_core_web_lg wheel during apply, as root
+    install_only: true
+    purpose: pinned en_core_web_lg wheel during apply, as root. Dropped after install.
   - name: embedding-model
     users: [root]
     hosts:
@@ -59,13 +57,15 @@ destinations:
       - cas-bridge.xethub.hf.co
     port: 443
     proto: tcp
-    purpose: one-time local MiniLM download during apply; the openwebui user cannot reach these hosts
+    install_only: true
+    purpose: one-time local MiniLM download during apply. Dropped after install. The openwebui user cannot reach these hosts.
   - name: ntp
     users: [systemd-timesync]
-    hosts: [time.cloudflare.com]
+    hosts:
+      - ntp.ubuntu.com
     port: 123
     proto: udp
-    purpose: time sync via systemd-timesyncd
+    purpose: time sync via systemd-timesyncd. The client queries ntp.ubuntu.com via the timesyncd drop-in. UDP has no SNI. Not a Cloudflare host.
   - name: azure-openai
     users: [litellm]
     env: AZURE_API_HOST
@@ -73,7 +73,7 @@ destinations:
     port: 443
     proto: tcp
     optional: true
-    purpose: Azure OpenAI resource hostname, US regions only (eastus2 or westus3 and the other US regions in policy.yaml)
+    purpose: Azure OpenAI host on the Presidio-gated path. The egress proxy dials this name only when AZURE_API_HOST is set. US regions only.
   - name: dns
     users: [systemd-resolve, root]
     env: DNS_SERVERS
@@ -101,13 +101,4 @@ destinations:
     port: 443
     proto: tcp
     optional: true
-    purpose: MCP upstream, disabled until an explicit host is set
-  - name: cloudflared
-    users: [cloudflared]
-    hosts:
-      - region1.v2.argotunnel.com
-      - region2.v2.argotunnel.com
-    port: 7844
-    proto: tcp
-    enabled: false
-    purpose: tunnel connector for a future non-PHI path; never Open WebUI or LiteLLM
+    purpose: MCP upstream, disabled until an explicit host is set. The policy gateway reaches it through 127.0.0.1:8891.

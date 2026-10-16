@@ -11,9 +11,7 @@ model_list:
       model: azure/os.environ/AZURE_OPENAI_DEPLOYMENT
       api_base: os.environ/AZURE_API_BASE
       api_version: os.environ/AZURE_API_VERSION
-      tenant_id: os.environ/AZURE_TENANT_ID
-      client_id: os.environ/AZURE_CLIENT_ID
-      client_secret: os.environ/AZURE_CLIENT_SECRET
+      api_key: os.environ/AZURE_API_KEY
 guardrails:
   - guardrail_name: presidio-pii
     litellm_params:
