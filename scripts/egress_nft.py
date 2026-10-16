@@ -5,7 +5,7 @@ accept. Apt (root and _apt) and the policy gateway use their own loopback
 ports. TCP/8088 accepts only the openwebui uid, also before the loopback
 accept. The proxy user dials 80 and 443 after the name check. DNS, NTP, and an
 optional SIEM port stay skuid accepts. DHCP renew and IPv6 neighbor discovery
-are allowed so the host does not need a static address.
+are allowed so the host does not need a static address. NTP is ntp.ubuntu.com.
 """
 
 from __future__ import annotations

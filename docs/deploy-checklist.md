@@ -13,3 +13,7 @@ Do not put PHI on this stack until Marko has cleared the build and every line be
 9. The user-id pilot gates in `docs/residual-risk.md` are true: only the `openwebui` uid can open TCP/8088, a missing gateway user id is rejected, audit rows store email and id, and the gateway client key was rotated if `local-ai-admins` changed since the last apply.
 10. A synthetic prompt (the fixture MRN, not real PHI) is masked in the audit row and the row has no raw identifier.
 11. Backup restore has a scheduled owner and a quarterly date. Break-glass secret is in the vault, not on the disk in cleartext beyond the sealed file used during an incident.
+12. `deploy/check-password-login.sh --live` prints `password login is refused`. sshd refuses password authentication, and Open WebUI sign-in answers HTTP 403.
+13. After the first Entra admin has signed in, `scripts/retire_bootstrap_admin.py --require` has run. The bootstrap row is `pending`, its password hash is null, and `/etc/open-webui/webui_admin_password` is empty.
+14. `scripts/capture_admin_role.py` wrote `/var/lib/local-ai-stack/evidence/local-ai-admins-role.json` with `"assigned": true` for group `local-ai-admins` and role `admin`. The Graph token is not in that file.
+15. Gateway health is probed with `deploy/health-check.sh gateway`, which runs `curl` as the `openwebui` uid. The LiteLLM `:4000` probe stays root because that uid is rejected from port 4000.

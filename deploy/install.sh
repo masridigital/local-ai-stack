@@ -122,6 +122,7 @@ install -d -m 0700 /etc/presidio-analyzer /etc/presidio-anonymizer /etc/litellm 
 
 install -d -m 0755 /opt/local-ai-stack/scripts /opt/local-ai-stack/postgres /opt/local-ai-stack/deploy
 cp -a "$ROOT/scripts/ensure_postgres.py" /opt/local-ai-stack/scripts/ensure_postgres.py
+cp -a "$ROOT/scripts/retire_bootstrap_admin.py" /opt/local-ai-stack/scripts/retire_bootstrap_admin.py
 cp -a "$ROOT/postgres/init" /opt/local-ai-stack/postgres/init
 rm -rf /opt/policy-gateway/stack /opt/policy-gateway/litellm /opt/policy-gateway/presidio
 cp -a "$ROOT/stack" /opt/policy-gateway/stack
@@ -257,6 +258,8 @@ install -m 0644 "$ROOT/deploy/systemd/local-ai-retention.service" /etc/systemd/s
 install -m 0644 "$ROOT/deploy/systemd/local-ai-retention.timer" /etc/systemd/system/local-ai-retention.timer
 install -m 0644 "$ROOT/deploy/systemd/local-ai-store-purge.service" /etc/systemd/system/local-ai-store-purge.service
 install -m 0644 "$ROOT/deploy/systemd/local-ai-store-purge.timer" /etc/systemd/system/local-ai-store-purge.timer
+install -m 0644 "$ROOT/deploy/systemd/local-ai-retire-bootstrap.service" /etc/systemd/system/local-ai-retire-bootstrap.service
+install -m 0644 "$ROOT/deploy/systemd/local-ai-retire-bootstrap.timer" /etc/systemd/system/local-ai-retire-bootstrap.timer
 install -d -m 0755 /etc/systemd/system/caddy.service.d /etc/systemd/system/postgresql@.service.d
 install -m 0644 "$ROOT/deploy/systemd/caddy.service.d.conf" /etc/systemd/system/caddy.service.d/10-hardening.conf
 install -m 0644 "$ROOT/deploy/systemd/postgresql.service.d.conf" /etc/systemd/system/postgresql@.service.d/10-hardening.conf
@@ -349,6 +352,7 @@ systemctl enable caddy.service
 systemctl enable local-ai-stack.target
 systemctl enable --now local-ai-retention.timer
 systemctl enable --now local-ai-store-purge.timer
+systemctl enable --now local-ai-retire-bootstrap.timer
 if [[ -f /etc/wireguard/wg0.conf ]]; then
   systemctl enable wg-quick@wg0.service
 else
@@ -364,6 +368,7 @@ systemctl enable --now local-ai-egress-refresh.timer
 
 systemctl restart egress-proxy.service
 systemctl start litellm.service
+# LiteLLM :4000 rejects the openwebui uid, so this probe stays root.
 litellm_up=0
 for _ in $(seq 1 60); do
   if curl -fsS --max-time 2 http://127.0.0.2:4000/health/liveliness >/dev/null; then
@@ -390,5 +395,25 @@ printf '%s\n' "$baa_current" > "$baa_stamp"
 chmod 0644 "$baa_stamp"
 rm -f /etc/apt/sources.list.d/cloudflared.list
 install -m 0644 "$ROOT/deploy/apt/99local-ai-proxy" /etc/apt/apt.conf.d/99local-ai-proxy
+
+systemctl restart policy-gateway.service
+# :8088 accepts only the openwebui uid, so the probe cannot run as root.
+gateway_up=0
+for _ in $(seq 1 60); do
+  if bash "$ROOT/deploy/health-check.sh" gateway; then
+    gateway_up=1
+    break
+  fi
+  sleep 1
+done
+if [[ "$gateway_up" -ne 1 ]]; then
+  echo "policy gateway health check failed" >&2
+  exit 1
+fi
+
+python3 "$ROOT/scripts/retire_bootstrap_admin.py" \
+  --db /var/lib/local-ai-stack/webui/webui.db \
+  --password-file /etc/open-webui/webui_admin_password
+bash "$ROOT/deploy/check-password-login.sh" --live --allow-down
 
 echo "install complete; native units are enabled"

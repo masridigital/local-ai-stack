@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import http.client
 import json
+import os
 import sqlite3
 import subprocess
 import threading
@@ -183,3 +184,218 @@ def test_unhandled_gateway_error_writes_an_audit_row(tmp_path, monkeypatch):
     assert rows[0]["reason"] == "unhandled"
     assert rows[0]["route"] == "/v1/chat/completions"
     assert MARKER not in json.dumps(rows[0])
+
+
+def test_retire_bootstrap_admin_clears_password_after_entra_admin(tmp_path):
+    from scripts.retire_bootstrap_admin import clear_password_file, retire
+
+    db = tmp_path / "webui.db"
+    conn = sqlite3.connect(db)
+    conn.execute("CREATE TABLE user (id TEXT, email TEXT, role TEXT, oauth TEXT)")
+    conn.execute("CREATE TABLE auth (id TEXT, email TEXT, password TEXT, active INTEGER)")
+    conn.execute(
+        "INSERT INTO user VALUES ('boot', 'webui-bootstrap@local-ai.internal', 'admin', NULL)"
+    )
+    conn.execute(
+        "INSERT INTO auth VALUES ('boot', 'webui-bootstrap@local-ai.internal', 'hash-fixture', 1)"
+    )
+    conn.execute(
+        "INSERT INTO user VALUES ('entra', 'pilot@example.invalid', 'user', ?)",
+        ('{"microsoft":{"sub":"synthetic-oid"}}',),
+    )
+    conn.commit()
+    assert retire(conn, "webui-bootstrap@local-ai.internal") == "waiting"
+    assert conn.execute("SELECT password FROM auth WHERE id = 'boot'").fetchone()[0] == "hash-fixture"
+    conn.execute("UPDATE user SET role = 'admin' WHERE id = 'entra'")
+    conn.commit()
+    password = tmp_path / "webui_admin_password"
+    password.write_text("bootstrap-fixture", encoding="utf-8")
+    password.chmod(0o600)
+    assert retire(conn, "webui-bootstrap@local-ai.internal") == "retired"
+    clear_password_file(password)
+    assert conn.execute("SELECT role FROM user WHERE id = 'boot'").fetchone()[0] == "pending"
+    assert conn.execute("SELECT password, active FROM auth WHERE id = 'boot'").fetchone() == (None, 0)
+    assert password.read_bytes() == b""
+    assert password.stat().st_mode & 0o777 == 0o600
+    entra = conn.execute("SELECT role FROM user WHERE id = 'entra'").fetchone()
+    assert entra[0] == "admin"
+    waiting = subprocess.run(
+        [
+            "python3",
+            str(ROOT / "scripts" / "retire_bootstrap_admin.py"),
+            "--db",
+            str(db),
+            "--require",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert waiting.returncode == 0
+    assert "retired" in waiting.stdout
+
+
+def test_password_login_check_requires_sshd_and_webui_refusal(tmp_path):
+    from http.server import BaseHTTPRequestHandler
+
+    class Signin(BaseHTTPRequestHandler):
+        code = 403
+
+        def do_POST(self):  # noqa: N802
+            length = int(self.headers.get("Content-Length", "0"))
+            body = self.rfile.read(length)
+            assert b"synthetic@example.invalid" in body
+            self.send_response(type(self).code)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+
+        def log_message(self, fmt: str, *args) -> None:
+            return
+
+    sshd = tmp_path / "sshd.txt"
+    sshd.write_text("passwordauthentication no\npermitrootlogin no\n", encoding="utf-8")
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Signin)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    url = f"http://127.0.0.1:{server.server_address[1]}"
+    script = str(ROOT / "deploy" / "check-password-login.sh")
+    try:
+        refused = subprocess.run(
+            ["bash", script, "--sshd-text", str(sshd), "--webui", url],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        assert refused.returncode == 0, refused.stderr
+        assert "password login is refused" in refused.stdout
+        assert "synthetic-not-a-password" not in refused.stdout
+        Signin.code = 200
+        allowed = subprocess.run(
+            ["bash", script, "--sshd-text", str(sshd), "--webui", url],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        assert allowed.returncode == 1
+        assert "password login was not refused" in allowed.stderr
+    finally:
+        server.shutdown()
+        server.server_close()
+    sshd.write_text("passwordauthentication yes\n", encoding="utf-8")
+    opened = subprocess.run(
+        ["bash", script, "--sshd-text", str(sshd), "--allow-down"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert opened.returncode == 1
+    assert "password login is not refused" in opened.stderr
+
+
+def test_admin_role_evidence_omits_tokens(tmp_path):
+    from scripts.capture_admin_role import build_evidence
+
+    assignments = {
+        "value": [
+            {
+                "principalDisplayName": "local-ai-admins",
+                "principalType": "Group",
+                "appRoleId": "role-admin",
+                "accessToken": "should-not-leak",
+            }
+        ]
+    }
+    roles = [{"id": "role-admin", "value": "admin"}, {"id": "role-phi", "value": "phi"}]
+    evidence = build_evidence(assignments, roles)
+    assert evidence["assigned"] is True
+    assert evidence["group"] == "local-ai-admins"
+    assert evidence["principal_count"] == 1
+    assert "should-not-leak" not in json.dumps(evidence)
+    assignment_path = tmp_path / "assignments.json"
+    role_path = tmp_path / "roles.json"
+    output = tmp_path / "evidence" / "local-ai-admins-role.json"
+    assignment_path.write_text(json.dumps(assignments), encoding="utf-8")
+    role_path.write_text(json.dumps(roles), encoding="utf-8")
+    captured = subprocess.run(
+        [
+            "python3",
+            str(ROOT / "scripts" / "capture_admin_role.py"),
+            "--assignments",
+            str(assignment_path),
+            "--app-roles",
+            str(role_path),
+            "--output",
+            str(output),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert captured.returncode == 0, captured.stderr
+    saved = json.loads(output.read_text(encoding="utf-8"))
+    assert saved["assigned"] is True
+    assert output.stat().st_mode & 0o777 == 0o600
+    roles_only = tmp_path / "phi.json"
+    roles_only.write_text(json.dumps([{"id": "role-phi", "value": "phi"}]), encoding="utf-8")
+    missing = subprocess.run(
+        [
+            "python3",
+            str(ROOT / "scripts" / "capture_admin_role.py"),
+            "--assignments",
+            str(assignment_path),
+            "--app-roles",
+            str(roles_only),
+            "--output",
+            str(tmp_path / "missing.json"),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert missing.returncode == 1
+    assert "not-assigned" in missing.stdout
+
+
+def test_gateway_health_check_runs_as_openwebui():
+    script = (ROOT / "deploy" / "health-check.sh").read_text(encoding="utf-8")
+    assert "runuser -u openwebui -- curl -fsS --max-time 2 http://127.0.0.1:8088/health" in script
+    install = (ROOT / "deploy" / "install.sh").read_text(encoding="utf-8")
+    assert 'health-check.sh" gateway' in install
+    for line in install.splitlines():
+        if "4000/health/liveliness" in line:
+            assert "runuser" not in line
+            assert "curl" in line
+
+
+def test_open_webui_run_omits_empty_bootstrap_password(tmp_path):
+    cred = tmp_path / "cred"
+    cred.mkdir()
+    (cred / "webui_secret_key").write_text("webui-fixture", encoding="utf-8")
+    (cred / "webui_admin_password").write_text("", encoding="utf-8")
+    (cred / "microsoft_client_secret").write_text("entra-fixture", encoding="utf-8")
+    (cred / "gateway_client_key").write_text("gateway-fixture", encoding="utf-8")
+    capture = tmp_path / "capture"
+    binary = tmp_path / "open-webui"
+    binary.write_text(
+        "#!/bin/sh\nprintf '%s' \"${WEBUI_ADMIN_PASSWORD-unset}\" > \"$CAPTURE\"\n",
+        encoding="utf-8",
+    )
+    binary.chmod(0o755)
+    env = os.environ.copy()
+    env.update(
+        {
+            "CREDENTIALS_DIRECTORY": str(cred),
+            "OPEN_WEBUI_BIN": str(binary),
+            "CAPTURE": str(capture),
+        }
+    )
+    proc = subprocess.run(
+        ["bash", str(ROOT / "deploy" / "open-webui-run.sh")],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert capture.read_text(encoding="utf-8") == "unset"
+    assert "entra-fixture" not in proc.stdout
