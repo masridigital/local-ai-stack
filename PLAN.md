@@ -16,7 +16,7 @@ User (Entra ID SSO + MFA via Conditional Access)
         ├─► presidio-anonymizer (ghcr.io/data-privacy-stack/presidio-anonymizer:<PINNED_TAG>)
         └─► postgres (encrypted volume)
 ```
-All services in Docker Compose on a dedicated VM/VLAN on Cap's on-prem hypervisor. No published ports to the internet; admin UIs reachable only over VPN. Egress allowlist: model API endpoints + Entra only.
+All services in Docker Compose on a dedicated VM/VLAN on Cap's on-prem hypervisor. Exposure only via Cloudflare Tunnel + Access (outbound-only, no inbound ports); only redacted data may cross Cloudflare (no BAA); admin UIs reachable only over VPN. Egress allowlist: model API endpoints + Entra only.
 
 ## 2. Repo layout (Phase 1 target)
 - `docker-compose.yml` — all images pinned by tag **and** digest; no `latest`.
@@ -27,12 +27,14 @@ All services in Docker Compose on a dedicated VM/VLAN on Cap's on-prem hyperviso
 - `docs/entra-sso.md` — app registration, OIDC for Open WebUI + LiteLLM admin UI, CA policy (phishing-resistant MFA for admins).
 - `tests/` — fixtures + acceptance tests.
 
-## 3. Phases
+## 3. Phases (full build — HIPAA / NYDFS 500 / FTC Safeguards, not an MVP)
 | Phase | Scope | Exit |
 |---|---|---|
-| 1 | Compose skeleton, pinned images, LiteLLM config w/ Presidio pre/post_call default_on, custom recognizers, Postgres audit logging, `.env.example`, docs, synthetic fixtures + test harness | Draft PR, CI green, Marko review |
-| 2 | Entra SSO+MFA wiring, MCP gateway + pre_mcp_call, SIEM export, backup/restore scripts | Restore test passes |
-| 3 | Deploy on Cap's hypervisor (after Marko CLEAR + Cap open questions answered) | Acceptance tests pass on target |
+| 1 | Compose (pinned tag+digest), LiteLLM w/ Presidio pre/post_call default_on (primary control), custom recognizers + deny-list, fail-closed, Postgres audit (redacted), model allowlist, `.env.example`, encrypted-volume + Entra docs, synthetic fixtures + tests, CI (gitleaks, SAST, image scan, SBOM) | Draft PR, CI green |
+| 2 | Entra SSO + MFA (CA, phishing-resistant admin), per-client virtual keys + rotation, MCP gateway + pre_mcp_call, SIEM export, retention 6y/5y, tamper-evident logs | Tests pass |
+| 3 | Hardening: non-root/read-only containers, internal TLS, egress allowlist, VLAN, backups 3-2-1 w/ immutable offsite + restore test, patch cadence, IR runbook (DLP failure), threat model + Marko red-team | Restore + red-team pass |
+| 4 | Deploy on Cap's hypervisor behind Cloudflare Tunnel+Access (no inbound ports; admin VPN-only) after Marko CLEAR | Acceptance on target |
+| 5 | Evidence pack per Reggie control mapping; quarterly review | Reggie sign-off |
 
 ## 4. Acceptance tests (synthetic data ONLY)
 Fixtures in `tests/fixtures/` are generated (Faker + fixed seeds) and labeled `SYNTHETIC`. **No real PHI, client data, or Lumina data — ever.** CI greps for a fixture header and fails if missing.
@@ -44,7 +46,8 @@ Fixtures in `tests/fixtures/` are generated (Faker + fixed seeds) and labeled `S
 6. **Audit:** every request writes a log row; row contains no raw fixture PII (grep check).
 7. **Exposure:** no service binds 0.0.0.0 on a host-published port except via reverse proxy on LAN interface; compose lint check.
 8. **Secrets:** no secrets in repo (gitleaks in CI); compose references env only.
-9. **Model allowlist:** request to non-allowlisted model rejected.
+9. **Cloudflare egress = redacted only (no BAA):** for any traffic reachable via the tunnel, capture egress during fixture suite; assert no raw synthetic PII appears; model-API legs go direct, not via cloudflared.
+10. **Model allowlist:** request to non-allowlisted model rejected.
 
 ## 5. Out of scope / guardrails for builders
 No deploy, no merge without Marko review, no real credentials, no public exposure, no real data.
