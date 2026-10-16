@@ -1,0 +1,18 @@
+---
+- name: postgresql listens on loopback
+  ansible.builtin.copy:
+    dest: /etc/postgresql/16/main/conf.d/local-ai.conf
+    mode: "0644"
+    content: "listen_addresses = '127.0.0.1'\n"
+
+- name: postgresql hardening drop-in
+  ansible.builtin.copy:
+    src: "{{ repo_root }}/deploy/systemd/postgresql.service.d.conf"
+    dest: /etc/systemd/system/postgresql@.service.d/10-hardening.conf
+    mode: "0644"
+
+- name: enable postgresql
+  ansible.builtin.systemd:
+    name: postgresql.service
+    enabled: true
+    daemon_reload: true

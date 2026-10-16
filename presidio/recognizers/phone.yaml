@@ -1,0 +1,5 @@
+entity: PHONE_NUMBER
+patterns:
+  - name: fictional_555
+    regex: '\b555[.\- ]01\d{2}\b'
+    score: 0.8

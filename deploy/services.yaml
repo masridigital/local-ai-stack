@@ -1,0 +1,91 @@
+# Native Ubuntu layout. install.sh and the Ansible roles both follow this file.
+runtime: native
+docker: false
+bind_default: 127.0.0.1
+spacy_model: en_core_web_lg==3.8.0
+apps:
+  - name: presidio-analyzer
+    user: presidio-analyzer
+    opt: /opt/presidio-analyzer
+    requirements:
+      - requirements/presidio-analyzer.txt
+      - requirements/spacy-model.txt
+    unit: presidio-analyzer.service
+    bind: 127.0.0.1
+    port: 3000
+    data_dir: /var/lib/local-ai-stack/presidio-analyzer
+    config_dir: /etc/presidio-analyzer
+    credentials: []
+  - name: presidio-anonymizer
+    user: presidio-anonymizer
+    opt: /opt/presidio-anonymizer
+    requirements:
+      - requirements/presidio-anonymizer.txt
+    unit: presidio-anonymizer.service
+    bind: 127.0.0.1
+    port: 3001
+    data_dir: /var/lib/local-ai-stack/presidio-anonymizer
+    config_dir: /etc/presidio-anonymizer
+    credentials: []
+  - name: litellm
+    user: litellm
+    opt: /opt/litellm
+    requirements:
+      - requirements/litellm.txt
+    unit: litellm.service
+    bind: 127.0.0.1
+    port: 4000
+    data_dir: /var/lib/local-ai-stack/litellm
+    config_dir: /etc/litellm
+    credentials:
+      - litellm_master_key
+      - anthropic_api_key
+      - azure_client_secret
+      - database_url
+  - name: policy-gateway
+    user: policy-gateway
+    opt: /opt/policy-gateway
+    requirements:
+      - requirements/policy-gateway.txt
+    unit: policy-gateway.service
+    bind: 127.0.0.1
+    port: 8088
+    data_dir: /var/lib/local-ai-stack/policy-gateway
+    config_dir: /etc/policy-gateway
+    credentials:
+      - litellm_virtual_key
+      - audit_database_url
+  - name: open-webui
+    user: openwebui
+    opt: /opt/open-webui
+    requirements:
+      - requirements/open-webui.txt
+    unit: open-webui.service
+    bind: 127.0.0.1
+    port: 8080
+    data_dir: /var/lib/local-ai-stack/webui
+    config_dir: /etc/open-webui
+    credentials:
+      - webui_secret_key
+      - microsoft_client_secret
+      - litellm_virtual_key
+apt_packages:
+  - python3
+  - python3-venv
+  - python3-dev
+  - build-essential
+  - postgresql
+  - postgresql-contrib
+  - ufw
+  - unattended-upgrades
+  - apt-listchanges
+  - auditd
+  - apparmor
+  - openssl
+  - restic
+  - ca-certificates
+  - curl
+  - gnupg
+  - wireguard
+  - caddy
+  - cloudflared

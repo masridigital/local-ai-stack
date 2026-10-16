@@ -1,0 +1,17 @@
+[Unit]
+Description=Purge Open WebUI chat history and uploads past retention
+
+[Service]
+Type=oneshot
+User=openwebui
+Group=openwebui
+NoNewPrivileges=yes
+ProtectSystem=strict
+PrivateTmp=yes
+ProtectHome=yes
+CapabilityBoundingSet=
+ReadWritePaths=/var/lib/local-ai-stack/webui
+ExecStart=/usr/bin/python3 /opt/policy-gateway/stack/retention.py --db /var/lib/local-ai-stack/webui/webui.db --days 30
+
+[Install]
+WantedBy=multi-user.target

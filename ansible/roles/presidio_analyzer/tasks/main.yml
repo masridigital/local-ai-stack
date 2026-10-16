@@ -1,0 +1,13 @@
+---
+- name: presidio analyzer
+  ansible.builtin.include_role:
+    name: python_app
+  vars:
+    app_user: presidio-analyzer
+    app_opt: /opt/presidio-analyzer
+    app_data: /var/lib/local-ai-stack/presidio-analyzer
+    app_etc: /etc/presidio-analyzer
+    app_unit: presidio-analyzer.service
+    app_requirements:
+      - requirements/presidio-analyzer.txt
+      - requirements/spacy-model.txt

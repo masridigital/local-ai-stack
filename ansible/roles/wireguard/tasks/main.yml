@@ -1,0 +1,11 @@
+---
+- name: wireguard package
+  ansible.builtin.apt:
+    name: wireguard
+    state: present
+
+- name: example config without a private key
+  ansible.builtin.copy:
+    src: "{{ repo_root }}/deploy/wireguard/wg0.conf.example"
+    dest: /usr/share/local-ai-stack/wg0.conf.example
+    mode: "0644"

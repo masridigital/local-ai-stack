@@ -1,20 +1,17 @@
-# EXAMPLE ONLY — placeholders; secrets come from env. Verify every model/feature against Cap's BAAs.
+# EXAMPLE ONLY — placeholders. Runtime config is litellm/config.yaml plus litellm/policy.yaml.
+# azure_ai/ is disabled by default (may fall outside Microsoft's BAA).
+# Abuse-monitoring opt-out is not configured; enable it only with existing written approval.
 model_list:
   - model_name: claude-sonnet
     litellm_params:
-      model: anthropic/claude-sonnet-4-5          # verify BAA scope
+      model: anthropic/claude-sonnet-4-5
       api_key: os.environ/ANTHROPIC_API_KEY
-  - model_name: foundry-model
+  - model_name: foundry-gpt
     litellm_params:
-      model: azure_ai/<FOUNDRY_DEPLOYMENT>          # verify HIPAA-eligible under Microsoft BAA
-      api_base: os.environ/AZURE_AI_API_BASE
-      api_key: os.environ/AZURE_AI_API_KEY          # or Entra (below)
-  - model_name: foundry-aoai
-    litellm_params:
-      model: azure/<AOAI_DEPLOYMENT>
+      model: azure/os.environ/AZURE_OPENAI_DEPLOYMENT
       api_base: os.environ/AZURE_API_BASE
       api_version: os.environ/AZURE_API_VERSION
-      tenant_id: os.environ/AZURE_TENANT_ID         # Entra service principal / managed identity
+      tenant_id: os.environ/AZURE_TENANT_ID
       client_id: os.environ/AZURE_CLIENT_ID
       client_secret: os.environ/AZURE_CLIENT_SECRET
 guardrails:
@@ -32,6 +29,6 @@ guardrails:
       default_on: true
 litellm_settings:
   telemetry: false
-  callbacks: []              # no third-party callbacks
+  callbacks: []
 general_settings:
   database_url: os.environ/DATABASE_URL

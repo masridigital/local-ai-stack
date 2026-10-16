@@ -1,0 +1,7 @@
+[Unit]
+Description=local-ai-stack (native, VPN/LAN only, not behind Cloudflare)
+Wants=postgresql.service presidio-analyzer.service presidio-anonymizer.service litellm.service policy-gateway.service open-webui.service caddy.service
+After=network-online.target
+
+[Install]
+WantedBy=multi-user.target

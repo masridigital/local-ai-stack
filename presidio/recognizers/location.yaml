@@ -1,0 +1,8 @@
+entity: LOCATION
+patterns:
+  - name: street
+    regex: '\b\d{1,5}\s+[A-Z][A-Za-z]+\s+(?:Street|St|Avenue|Ave|Road|Rd|Boulevard|Blvd)\b'
+    score: 0.7
+  - name: synthetic_city
+    regex: '\bTestville,\s*ZZ\s+00000\b'
+    score: 0.8

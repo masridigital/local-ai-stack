@@ -1,0 +1,96 @@
+# EXAMPLE ONLY. The policy gateway is the tested choke point.
+# Secrets come from systemd LoadCredential via deploy/litellm-run.sh.
+# Verify every model against Cap's BAAs before ANTHROPIC_BAA_ENABLED is turned on.
+model_list:
+  - model_name: claude-sonnet
+    litellm_params:
+      model: anthropic/claude-sonnet-4-5
+      api_key: os.environ/ANTHROPIC_API_KEY
+  - model_name: claude-haiku
+    litellm_params:
+      model: anthropic/claude-haiku-4-5
+      api_key: os.environ/ANTHROPIC_API_KEY
+  - model_name: claude-opus
+    litellm_params:
+      model: anthropic/claude-opus-4-5
+      api_key: os.environ/ANTHROPIC_API_KEY
+  - model_name: foundry-gpt
+    litellm_params:
+      model: azure/os.environ/AZURE_OPENAI_DEPLOYMENT
+      api_base: os.environ/AZURE_API_BASE
+      api_version: os.environ/AZURE_API_VERSION
+      tenant_id: os.environ/AZURE_TENANT_ID
+      client_id: os.environ/AZURE_CLIENT_ID
+      client_secret: os.environ/AZURE_CLIENT_SECRET
+      # azure_ai/ is omitted on purpose. Marketplace and partner models may fall
+      # outside Microsoft's BAA. Do not add them unless ALLOW_AZURE_AI_THIRD_PARTY
+      # is approved. Do not set an abuse-monitoring opt-out header here.
+
+litellm_settings:
+  telemetry: false
+  turn_off_message_logging: true
+  success_callback: []
+  failure_callback: []
+  callbacks: []
+  drop_params: false
+  set_verbose: false
+  json_logs: true
+  redact_user_api_key_info: true
+
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY
+  database_url: os.environ/DATABASE_URL
+  store_prompts_in_spend_logs: false
+  allow_requests_on_db_unavailable: false
+
+# pii_entities_config makes LiteLLM 1.105 fail closed on invalid analyzer responses.
+# apply_to_output masks non-streaming responses. Streaming stays off at the gateway.
+guardrails:
+  - guardrail_name: presidio-pii
+    litellm_params:
+      guardrail: presidio
+      mode: [pre_call, post_call]
+      default_on: true
+      apply_to_output: true
+      presidio_analyzer_api_base: os.environ/PRESIDIO_ANALYZER_API_BASE
+      presidio_anonymizer_api_base: os.environ/PRESIDIO_ANONYMIZER_API_BASE
+      presidio_ad_hoc_recognizers: /opt/litellm/presidio/recognizers.json
+      presidio_score_thresholds:
+        ALL: 0.4
+      pii_entities_config:
+        PERSON: MASK
+        US_SSN: MASK
+        PHONE_NUMBER: MASK
+        EMAIL_ADDRESS: MASK
+        CREDIT_CARD: MASK
+        LOCATION: MASK
+        MRN: MASK
+        RECORD_ID: MASK
+        ACCOUNT_ID: MASK
+        NPI: MASK
+        DOB: MASK
+  - guardrail_name: presidio-mcp
+    litellm_params:
+      guardrail: presidio
+      mode: pre_mcp_call
+      default_on: true
+      presidio_analyzer_api_base: os.environ/PRESIDIO_ANALYZER_API_BASE
+      presidio_anonymizer_api_base: os.environ/PRESIDIO_ANONYMIZER_API_BASE
+      presidio_ad_hoc_recognizers: /opt/litellm/presidio/recognizers.json
+      presidio_score_thresholds:
+        ALL: 0.4
+      pii_entities_config:
+        PERSON: MASK
+        US_SSN: MASK
+        PHONE_NUMBER: MASK
+        EMAIL_ADDRESS: MASK
+        CREDIT_CARD: MASK
+        LOCATION: MASK
+        MRN: MASK
+        RECORD_ID: MASK
+        ACCOUNT_ID: MASK
+        NPI: MASK
+        DOB: MASK
+
+router_settings:
+  routing_strategy: simple-shuffle

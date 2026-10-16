@@ -1,0 +1,5 @@
+entity: EMAIL_ADDRESS
+patterns:
+  - name: mailbox
+    regex: '\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b'
+    score: 0.8

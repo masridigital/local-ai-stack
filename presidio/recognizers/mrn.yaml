@@ -1,0 +1,11 @@
+entity: MRN
+patterns:
+  - name: canonical
+    regex: '\bMRN-SYN-\d{7}\b'
+    score: 0.95
+  - name: labeled
+    regex: '\bMRN[-: ][A-Z0-9]{5,12}\b'
+    score: 0.75
+  - name: spaced_synthetic
+    regex: '(?i)M\s*R\s*N\s*-\s*S\s*Y\s*N\s*-\s*(?:\d\s*){7}'
+    score: 0.9

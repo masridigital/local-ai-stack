@@ -1,0 +1,8 @@
+entity: NPI
+patterns:
+  - name: canonical
+    regex: '\bNPI-SYN-\d{10}\b'
+    score: 0.95
+  - name: labeled
+    regex: '\bNPI[-: ]\d{10}\b'
+    score: 0.85

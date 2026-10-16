@@ -1,0 +1,2 @@
+# Policy-gateway runtime lock. pip verifies the hashes in the included file.
+-r requirements/policy-gateway.txt

@@ -1,0 +1,12 @@
+---
+- name: litellm
+  ansible.builtin.include_role:
+    name: python_app
+  vars:
+    app_user: litellm
+    app_opt: /opt/litellm
+    app_data: /var/lib/local-ai-stack/litellm
+    app_etc: /etc/litellm
+    app_unit: litellm.service
+    app_requirements:
+      - requirements/litellm.txt

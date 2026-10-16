@@ -1,0 +1,12 @@
+---
+- name: presidio anonymizer
+  ansible.builtin.include_role:
+    name: python_app
+  vars:
+    app_user: presidio-anonymizer
+    app_opt: /opt/presidio-anonymizer
+    app_data: /var/lib/local-ai-stack/presidio-anonymizer
+    app_etc: /etc/presidio-anonymizer
+    app_unit: presidio-anonymizer.service
+    app_requirements:
+      - requirements/presidio-anonymizer.txt

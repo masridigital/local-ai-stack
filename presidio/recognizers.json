@@ -1,0 +1,169 @@
+[
+  {
+    "name": "ACCOUNT_IDRecognizer",
+    "supported_language": "en",
+    "supported_entity": "ACCOUNT_ID",
+    "patterns": [
+      {
+        "name": "canonical",
+        "regex": "\\bACCT-SYN-\\d{8}\\b",
+        "score": 0.95
+      },
+      {
+        "name": "labeled",
+        "regex": "\\bACCT[-_ ][A-Z0-9]{6,18}\\b",
+        "score": 0.7
+      }
+    ]
+  },
+  {
+    "name": "CREDIT_CARDRecognizer",
+    "supported_language": "en",
+    "supported_entity": "CREDIT_CARD",
+    "patterns": [
+      {
+        "name": "test_pan",
+        "regex": "\\b4111[\\s-]?1111[\\s-]?1111[\\s-]?1111\\b",
+        "score": 0.95
+      }
+    ]
+  },
+  {
+    "name": "DOBRecognizer",
+    "supported_language": "en",
+    "supported_entity": "DOB",
+    "patterns": [
+      {
+        "name": "iso_date",
+        "regex": "\\b(?:19|20)\\d{2}-\\d{2}-\\d{2}\\b",
+        "score": 0.7
+      },
+      {
+        "name": "us_date",
+        "regex": "\\b\\d{2}/\\d{2}/(?:19|20)\\d{2}\\b",
+        "score": 0.7
+      }
+    ]
+  },
+  {
+    "name": "EMAIL_ADDRESSRecognizer",
+    "supported_language": "en",
+    "supported_entity": "EMAIL_ADDRESS",
+    "patterns": [
+      {
+        "name": "mailbox",
+        "regex": "\\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}\\b",
+        "score": 0.8
+      }
+    ]
+  },
+  {
+    "name": "LOCATIONRecognizer",
+    "supported_language": "en",
+    "supported_entity": "LOCATION",
+    "patterns": [
+      {
+        "name": "street",
+        "regex": "\\b\\d{1,5}\\s+[A-Z][A-Za-z]+\\s+(?:Street|St|Avenue|Ave|Road|Rd|Boulevard|Blvd)\\b",
+        "score": 0.7
+      },
+      {
+        "name": "synthetic_city",
+        "regex": "\\bTestville,\\s*ZZ\\s+00000\\b",
+        "score": 0.8
+      }
+    ]
+  },
+  {
+    "name": "MRNRecognizer",
+    "supported_language": "en",
+    "supported_entity": "MRN",
+    "patterns": [
+      {
+        "name": "canonical",
+        "regex": "\\bMRN-SYN-\\d{7}\\b",
+        "score": 0.95
+      },
+      {
+        "name": "labeled",
+        "regex": "\\bMRN[-: ][A-Z0-9]{5,12}\\b",
+        "score": 0.75
+      },
+      {
+        "name": "spaced_synthetic",
+        "regex": "(?i)M\\s*R\\s*N\\s*-\\s*S\\s*Y\\s*N\\s*-\\s*(?:\\d\\s*){7}",
+        "score": 0.9
+      }
+    ]
+  },
+  {
+    "name": "NPIRecognizer",
+    "supported_language": "en",
+    "supported_entity": "NPI",
+    "patterns": [
+      {
+        "name": "canonical",
+        "regex": "\\bNPI-SYN-\\d{10}\\b",
+        "score": 0.95
+      },
+      {
+        "name": "labeled",
+        "regex": "\\bNPI[-: ]\\d{10}\\b",
+        "score": 0.85
+      }
+    ]
+  },
+  {
+    "name": "PERSONRecognizer",
+    "supported_language": "en",
+    "supported_entity": "PERSON",
+    "patterns": [
+      {
+        "name": "synthetic_deny_list",
+        "regex": "\\b(?:Testy McFakerson|Jane Synthetic-Doe|Pat Placeholder)\\b",
+        "score": 0.95
+      }
+    ]
+  },
+  {
+    "name": "PHONE_NUMBERRecognizer",
+    "supported_language": "en",
+    "supported_entity": "PHONE_NUMBER",
+    "patterns": [
+      {
+        "name": "fictional_555",
+        "regex": "\\b555[.\\- ]01\\d{2}\\b",
+        "score": 0.8
+      }
+    ]
+  },
+  {
+    "name": "RECORD_IDRecognizer",
+    "supported_language": "en",
+    "supported_entity": "RECORD_ID",
+    "patterns": [
+      {
+        "name": "canonical",
+        "regex": "\\bREC-SYN-\\d{6}\\b",
+        "score": 0.95
+      },
+      {
+        "name": "labeled",
+        "regex": "\\bRECORD[-_ ][A-Z0-9]{5,16}\\b",
+        "score": 0.7
+      }
+    ]
+  },
+  {
+    "name": "US_SSNRecognizer",
+    "supported_language": "en",
+    "supported_entity": "US_SSN",
+    "patterns": [
+      {
+        "name": "dashed_or_dotted",
+        "regex": "\\b\\d{3}[-.]\\d{2}[-.]\\d{4}\\b",
+        "score": 0.85
+      }
+    ]
+  }
+]

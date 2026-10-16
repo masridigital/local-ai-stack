@@ -1,0 +1,31 @@
+---
+- name: vendor apt repositories
+  ansible.builtin.command: bash {{ repo_root }}/deploy/apt-repos.sh
+  changed_when: false
+
+- name: load native service manifest
+  ansible.builtin.include_vars: "{{ repo_root }}/deploy/services.yaml"
+
+- name: install native packages
+  ansible.builtin.apt:
+    name: "{{ apt_packages }}"
+    state: present
+    update_cache: true
+
+- name: ssh drop-in
+  ansible.builtin.copy:
+    src: "{{ repo_root }}/deploy/ssh/99-local-ai.conf"
+    dest: /etc/ssh/sshd_config.d/99-local-ai.conf
+    mode: "0644"
+
+- name: sysctl
+  ansible.builtin.copy:
+    src: "{{ repo_root }}/deploy/sysctl/99-local-ai.conf"
+    dest: /etc/sysctl.d/99-local-ai.conf
+    mode: "0644"
+
+- name: journald limits
+  ansible.builtin.copy:
+    src: "{{ repo_root }}/deploy/journald/local-ai.conf"
+    dest: /etc/systemd/journald.conf.d/local-ai.conf
+    mode: "0644"

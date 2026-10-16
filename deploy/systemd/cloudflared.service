@@ -1,0 +1,21 @@
+[Unit]
+Description=cloudflared for a non-PHI path (disabled; config sinks to http 404)
+After=network-online.target
+
+[Service]
+Type=simple
+User=cloudflared
+Group=cloudflared
+NoNewPrivileges=yes
+ProtectSystem=strict
+PrivateTmp=yes
+ProtectHome=yes
+CapabilityBoundingSet=
+LoadCredential=credentials.json:/etc/cloudflared/credentials.json
+ExecStart=/usr/bin/cloudflared --config /etc/cloudflared/config.yml --no-autoupdate tunnel run
+Restart=on-failure
+RestartSec=15
+IPAddressDeny=any
+
+[Install]
+WantedBy=multi-user.target

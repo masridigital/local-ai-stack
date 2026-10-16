@@ -1,0 +1,7 @@
+# Synthetic deny-list only. Real client or patient names are loaded at deploy
+# from a vault file that is not committed.
+entity: PERSON
+patterns:
+  - name: synthetic_deny_list
+    regex: '\b(?:Testy McFakerson|Jane Synthetic-Doe|Pat Placeholder)\b'
+    score: 0.95

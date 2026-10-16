@@ -1,0 +1,23 @@
+---
+- name: default deny incoming
+  ansible.builtin.command: ufw default deny incoming
+  changed_when: false
+
+- name: default deny outgoing
+  ansible.builtin.command: ufw default deny outgoing
+  changed_when: false
+
+- name: allow loopback
+  ansible.builtin.command: ufw {{ item }}
+  loop:
+    - allow in on lo
+    - allow out on lo
+  changed_when: false
+
+- name: owner-matched egress
+  ansible.builtin.command: python3 {{ repo_root }}/scripts/egress_owners.py --apply-ufw --dest {{ repo_root }}/deploy/egress-destinations.yaml
+  changed_when: false
+
+- name: enable ufw
+  ansible.builtin.command: ufw --force enable
+  changed_when: false

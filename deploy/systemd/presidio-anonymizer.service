@@ -1,0 +1,36 @@
+[Unit]
+Description=Presidio anonymizer (loopback only)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=presidio-anonymizer
+Group=presidio-anonymizer
+WorkingDirectory=/opt/presidio-anonymizer/server
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=BIND_HOST=127.0.0.1
+Environment=PORT=3001
+Environment=LOG_LEVEL=ERROR
+ExecStart=/opt/presidio-anonymizer/venv/bin/gunicorn -w 1 -b 127.0.0.1:3001 --log-level error app:create_app()
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=
+UMask=0077
+ReadWritePaths=/var/lib/local-ai-stack/presidio-anonymizer
+IPAddressDeny=any
+IPAddressAllow=localhost
+
+[Install]
+WantedBy=local-ai-stack.target
