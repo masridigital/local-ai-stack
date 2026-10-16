@@ -96,9 +96,12 @@ PRACTICES = (
     Practice(
         id="ms.azure-mcp-least-privilege",
         source="https://learn.microsoft.com/en-us/azure/developer/azure-mcp-server/security",
-        disposition="tested",
-        detail="Server-side tools, azure_ai, and Anthropic stay off unless a flag is set. No wildcard tools.",
-        test="test_bp_least_privilege_defaults",
+        disposition="defer",
+        detail=(
+            "ANTHROPIC_BAA_ENABLED still defaults off in the gateway. Main rejects every uid on TCP/4000 in nftables "
+            "and loads the Anthropic key only from the BAA drop-in. This suite does not treat that host filter as "
+            "proof of Microsoft's least-privilege practice; the nft rule belongs to the host lane."
+        ),
     ),
     Practice(
         id="ms.apim-ai-gateway",
@@ -139,9 +142,12 @@ PRACTICES = (
     Practice(
         id="payload.least-privilege",
         source="https://learn.microsoft.com/en-us/azure/developer/azure-mcp-server/security",
-        disposition="tested",
-        detail="Default policy enables one chat route and no MCP upstreams.",
-        test="test_bp_least_privilege_defaults",
+        disposition="defer",
+        detail=(
+            "Owner-matched egress and separate system users exist. api.anthropic.com stays inactive until "
+            "ANTHROPIC_BAA_ENABLED=true, and nftables rejects TCP/4000 before the loopback accept. This suite does "
+            "not claim that host filter as a tested least-privilege control; the host lane owns the nft rule."
+        ),
     ),
     Practice(
         id="payload.reject-unknown-fields",

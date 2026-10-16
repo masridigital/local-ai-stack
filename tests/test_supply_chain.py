@@ -51,8 +51,18 @@ def test_ci_installs_pinned_presidio_without_docker():
     assert "requirements/presidio-analyzer.txt" in workflow
     assert "requirements/presidio-anonymizer.txt" in workflow
     assert "requirements/spacy-model.txt" in workflow
-    assert "aquasecurity/trivy-action@v0.36.0" in workflow
-    assert "gitleaks/gitleaks-action@v2" in workflow
+    assert "actions/checkout@11d5960a326750d5838078e36cf38b85af677262" in workflow
+    assert "actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065" in workflow
+    assert "gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7" in workflow
+    assert "aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25" in workflow
+    assert "fetch-depth: 0" in workflow
+    assert "contents: read" in workflow
+    assert "nftables" in workflow
+    assert "pip install -r requirements-dev.txt" in workflow
+    assert "GITLEAKS_VERSION" not in workflow
+    assert "install_gitleaks" not in workflow
+    assert "gitleaks/gitleaks-action@v2" not in workflow
+    assert "aquasecurity/trivy-action@v0.36.0" not in workflow
     assert "pytest" in workflow
     assert "bandit" in workflow
     assert "shellcheck" in workflow
