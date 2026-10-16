@@ -1,6 +1,6 @@
 # SECURITY — local-ai-stack
 
-- **Data:** Red-lane (PHI/NPI) processing only via Anthropic Claude API directly under Cap's BAA, BAA-covered features only (others blocked; verify scope + ZDR against Cap's BAA). No LiteLLM telemetry or third-party callbacks. Test fixtures are synthetic only; real PHI, client, or Lumina data must never be committed, logged in CI, or used in tests.
+- **Data:** Red-lane (PHI/NPI) processing only via Anthropic Claude API directly under Cap's BAA, BAA-covered features only (others blocked; verify scope + ZDR against Cap's BAA). Second backend: Microsoft Foundry (azure_ai/, azure/) in Cap's tenant, limited to Microsoft BAA/HIPAA-eligible services (verify per model; abuse-monitoring retention opt-out where eligible), Entra/managed-identity auth preferred. Same Presidio guardrail on both backends. No LiteLLM telemetry or third-party callbacks. Test fixtures are synthetic only; real PHI, client, or Lumina data must never be committed, logged in CI, or used in tests.
 - **DLP:** Presidio guardrail pre_call + post_call, `default_on: true`, authoritative. Presidio failure ⇒ request blocked (fail closed). Presidio is a seatbelt, not de-identification.
 - **Identity:** Entra ID SSO (OIDC) + MFA via Conditional Access; phishing-resistant MFA for admin. Per-client LiteLLM virtual keys; 90-day rotation.
 - **Network:** No public exposure, no inbound ports. Dedicated VLAN. Admin UIs VPN-only. Egress allowlist.

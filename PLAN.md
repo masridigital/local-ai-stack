@@ -7,7 +7,7 @@ Task: `local-ai-dlp` · Aligned with `/workspace/local-ai-dlp-plan.md` (Red lane
 User (Entra ID SSO + MFA via Conditional Access)
   └─► Open WebUI (OIDC, LAN/VPN only)
         └─► LiteLLM Proxy
-              • model allowlist: anthropic/claude-* ONLY, via Anthropic Claude API directly under Cap's BAA (key via env)
+              • model allowlist (two backends only): (1) anthropic/claude-* via Anthropic Claude API under Cap's BAA; (2) Microsoft (Azure AI) Foundry via azure_ai/ and azure/ in Cap's tenant under Microsoft BAA
               • Presidio guardrail: pre_call + post_call, default_on: true
               • custom recognizers: MRN, EHR record IDs, account/bank #s, NPI (synthetic-tested)
               • MCP gateway with pre_mcp_call Presidio guardrail
@@ -16,7 +16,7 @@ User (Entra ID SSO + MFA via Conditional Access)
         ├─► presidio-anonymizer (ghcr.io/data-privacy-stack/presidio-anonymizer:<PINNED_TAG>)
         └─► postgres (encrypted volume)
 ```
-All services in Docker Compose on a dedicated VM/VLAN on Cap's on-prem hypervisor. Exposure only via Cloudflare Tunnel + Access (outbound-only, no inbound ports); only redacted data may cross Cloudflare (no BAA); admin UIs reachable only over VPN. Egress allowlist: api.anthropic.com + Entra only.
+All services in Docker Compose on a dedicated VM/VLAN on Cap's on-prem hypervisor. Exposure only via Cloudflare Tunnel + Access (outbound-only, no inbound ports); only redacted data may cross Cloudflare (no BAA); admin UIs reachable only over VPN. Egress allowlist: api.anthropic.com, Cap's Foundry/Azure OpenAI endpoints, Entra only.
 
 ## 2. Repo layout (Phase 1 target)
 - `docker-compose.yml` — all images pinned by tag **and** digest; no `latest`.
@@ -46,6 +46,7 @@ Fixtures in `tests/fixtures/` are generated (Faker + fixed seeds) and labeled `S
 6. **Audit:** every request writes a log row; row contains no raw fixture PII (grep check).
 7. **Exposure:** no service binds 0.0.0.0 on a host-published port except via reverse proxy on LAN interface; compose lint check.
 8. **Secrets:** no secrets in repo (gitleaks in CI); compose references env only.
+8b. **Per-backend guardrail:** tests 1, 2 and 4 (pre_call, post_call, fail-closed) run separately against a mock Anthropic backend AND a mock Foundry backend (azure_ai/ and azure/); each must pass on its own.
 9. **Cloudflare egress = redacted only (no BAA):** for any traffic reachable via the tunnel, capture egress during fixture suite; assert no raw synthetic PII appears; model-API legs go direct, not via cloudflared.
 10. **Model allowlist:** request to non-allowlisted model rejected.
 
@@ -53,7 +54,7 @@ Fixtures in `tests/fixtures/` are generated (Faker + fixed seeds) and labeled `S
 No deploy, no merge without Marko review, no real credentials, no public exposure, no real data.
 
 ## 6. HIPAA-eligible Anthropic configuration
-- Backend: Anthropic Claude API directly under Cap's BAA. No Bedrock/Vertex/other vendors. `ANTHROPIC_API_KEY` (Cap's HIPAA org key) from env/vault only.
+- Backend: Anthropic Claude API directly under Cap's BAA. Second backend is Microsoft Foundry (§7). No Bedrock/Vertex/other vendors. `ANTHROPIC_API_KEY` (Cap's HIPAA org key) from env/vault only.
 - Allow only BAA-covered endpoints/features; block at LiteLLM (param filtering / allowed routes) everything else — **verify each against Cap's BAA**: beta headers/features, server-side tools (web search, web fetch, code execution), Files API, Message Batches, prompt-caching variants, computer use.
 - Zero-data-retention: enable if part of Cap's agreement — **verify ZDR status**.
 - LiteLLM: `telemetry: False`; no third-party success/failure callbacks (Langfuse, Helicone, etc.); logs local Postgres only. Open WebUI: disable external web search, analytics, community sharing, external model connections.
@@ -69,3 +70,10 @@ Deliverables in-repo: `docker compose` stack; `deploy/systemd/*.service` (compos
 - **Encrypted backups**: restic/borg encrypted, 3-2-1 with immutable offsite copy, quarterly restore test.
 Acceptance: install.sh shellcheck clean and idempotent in CI (Ubuntu LTS container/VM); UFW rules test asserts no listening inbound ports beyond allowed.
 
+
+## 7. Microsoft (Azure AI) Foundry backend
+- LiteLLM providers: `azure_ai/<deployment>` (Foundry models) and `azure/<deployment>` (Azure OpenAI in Foundry). Only Cap's tenant endpoints.
+- Auth: Entra ID (managed identity or service principal via `AZURE_TENANT_ID`/`AZURE_CLIENT_ID`/`AZURE_CLIENT_SECRET`, or workload identity) preferred; API key via env (`AZURE_AI_API_KEY`, `AZURE_API_KEY`) as fallback. Keys never in the repo.
+- Same Presidio guardrail (pre_call + post_call, default_on, fail-closed) on both backends. Guardrails are global, not per-model opt-in.
+- Compliance: use only Microsoft BAA-covered, HIPAA-eligible Foundry services and models in Cap's tenant. **Verify per model** (Foundry partner/marketplace models may fall outside Microsoft's BAA). Request the abuse-monitoring data-retention / human-review opt-out (modified abuse monitoring) where eligible. **Verify against Cap's BAA.** Choose US regions; private endpoints when feasible; disable unneeded Foundry features (content logging, agents/tools outside scope).
+- See `litellm/config.example.yaml`.

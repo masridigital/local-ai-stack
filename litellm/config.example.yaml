@@ -1,0 +1,37 @@
+# EXAMPLE ONLY — placeholders; secrets come from env. Verify every model/feature against Cap's BAAs.
+model_list:
+  - model_name: claude-sonnet
+    litellm_params:
+      model: anthropic/claude-sonnet-4-5          # verify BAA scope
+      api_key: os.environ/ANTHROPIC_API_KEY
+  - model_name: foundry-model
+    litellm_params:
+      model: azure_ai/<FOUNDRY_DEPLOYMENT>          # verify HIPAA-eligible under Microsoft BAA
+      api_base: os.environ/AZURE_AI_API_BASE
+      api_key: os.environ/AZURE_AI_API_KEY          # or Entra (below)
+  - model_name: foundry-aoai
+    litellm_params:
+      model: azure/<AOAI_DEPLOYMENT>
+      api_base: os.environ/AZURE_API_BASE
+      api_version: os.environ/AZURE_API_VERSION
+      tenant_id: os.environ/AZURE_TENANT_ID         # Entra service principal / managed identity
+      client_id: os.environ/AZURE_CLIENT_ID
+      client_secret: os.environ/AZURE_CLIENT_SECRET
+guardrails:
+  - guardrail_name: presidio-pii
+    litellm_params:
+      guardrail: presidio
+      mode: [pre_call, post_call]
+      default_on: true
+      presidio_analyzer_api_base: os.environ/PRESIDIO_ANALYZER_API_BASE
+      presidio_anonymizer_api_base: os.environ/PRESIDIO_ANONYMIZER_API_BASE
+  - guardrail_name: presidio-mcp
+    litellm_params:
+      guardrail: presidio
+      mode: pre_mcp_call
+      default_on: true
+litellm_settings:
+  telemetry: false
+  callbacks: []              # no third-party callbacks
+general_settings:
+  database_url: os.environ/DATABASE_URL
