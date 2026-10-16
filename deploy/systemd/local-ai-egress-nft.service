@@ -3,6 +3,7 @@ Description=Load local-ai egress filter before the network is configured
 DefaultDependencies=no
 After=local-fs.target
 Before=network-pre.target
+Wants=network-pre.target
 
 [Service]
 Type=oneshot
@@ -12,4 +13,5 @@ EnvironmentFile=-/etc/local-ai-stack/egress.env
 ExecStart=/usr/local/sbin/local-ai-egress-refresh --nft-only
 
 [Install]
-WantedBy=network-pre.target
+WantedBy=sysinit.target
+WantedBy=multi-user.target

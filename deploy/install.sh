@@ -352,6 +352,7 @@ systemctl enable systemd-timesyncd
 systemctl try-restart systemd-timesyncd || true
 systemctl restart systemd-journald || true
 systemctl enable auditd || true
+rm -f /etc/systemd/system/network-pre.target.wants/local-ai-egress-nft.service
 systemctl enable local-ai-egress-nft.service
 systemctl enable --now local-ai-egress-refresh.timer
 

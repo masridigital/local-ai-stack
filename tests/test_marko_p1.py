@@ -7,6 +7,7 @@ import os
 import stat
 import subprocess
 import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -18,6 +19,24 @@ from stack.server import MAX_CONTENT_LENGTH, Handler, bind_address, checked_cont
 from scripts.scope_virtual_key import request_body
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def _client_hello(hostname: str | None, *, ech: bool = False) -> bytes:
+    """Synthetic TLS ClientHello. Not a live handshake."""
+    extensions = b""
+    if hostname is not None:
+        encoded = hostname.encode("ascii")
+        entry = b"\x00" + len(encoded).to_bytes(2, "big") + encoded
+        extensions += (0).to_bytes(2, "big") + (len(entry) + 2).to_bytes(2, "big") + len(entry).to_bytes(2, "big") + entry
+    if ech:
+        payload = b"\x00\x01"
+        extensions += (0xFE0D).to_bytes(2, "big") + len(payload).to_bytes(2, "big") + payload
+    body = b"\x03\x03" + (b"\x11" * 32) + b"\x00"
+    ciphers = b"\x13\x01"
+    body += len(ciphers).to_bytes(2, "big") + ciphers + b"\x01\x00"
+    body += len(extensions).to_bytes(2, "big") + extensions
+    handshake = b"\x01" + len(body).to_bytes(3, "big") + body
+    return b"\x16\x03\x01" + len(handshake).to_bytes(2, "big") + handshake
 
 
 def test_zdr_attestation_cites_cap_chat():
@@ -406,6 +425,11 @@ def test_user_groups_header_stays_comma_separated():
     assert "nd-neighbor-solicit" in design
     assert "nobody" in design
     assert "0.pool.ntp.org" in design
+    assert "root blocked" in design
+    assert "Host: evil.example" in design
+    assert "Wants=network-pre.target" in (ROOT / "deploy" / "systemd" / "local-ai-egress-nft.service").read_text(encoding="utf-8")
+    assert "WantedBy=sysinit.target" in (ROOT / "deploy" / "systemd" / "local-ai-egress-nft.service").read_text(encoding="utf-8")
+    assert "WantedBy=multi-user.target" in (ROOT / "deploy" / "systemd" / "local-ai-egress-nft.service").read_text(encoding="utf-8")
 
 
 def test_litellm_port_4000_is_gated():
@@ -671,7 +695,9 @@ def test_proxy_allowlist_is_per_service():
         PROXY_LISTENERS,
         RUNTIME_LISTENERS,
         EgressProxy,
+        SniError,
         bind_address,
+        client_hello_sni,
         connect_allowed,
         forbidden_ip,
     )
@@ -727,19 +753,35 @@ def test_proxy_allowlist_is_per_service():
         bind_address("::")
     assert bind_address("127.0.0.1") == "127.0.0.1"
     dialed: list[tuple[str, int]] = []
+    forwarded: list[bytes] = []
+    upstream_http: list[bytes] = []
 
     def connect(host: str, port: int):
         dialed.append((host, port))
         left, right = socket.socketpair()
         if port == 80:
             def reply() -> None:
-                right.recv(4096)
-                right.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n")
+                data = b""
+                while b"\r\n\r\n" not in data and len(data) < 8192:
+                    chunk = right.recv(4096)
+                    if not chunk:
+                        break
+                    data += chunk
+                upstream_http.append(data)
+                right.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
                 right.close()
 
             threading.Thread(target=reply, daemon=True).start()
             return left
-        right.close()
+
+        def grab() -> None:
+            try:
+                forwarded.append(right.recv(8192))
+            except OSError:
+                forwarded.append(b"")
+            right.close()
+
+        threading.Thread(target=grab, daemon=True).start()
         return left
 
     def resolve(host: str) -> list[str]:
@@ -794,7 +836,7 @@ def test_proxy_allowlist_is_per_service():
         assert cloud.startswith(b"HTTP/1.1 403")
         http_ok = request(
             "apt",
-            b"GET http://archive.ubuntu.com/ubuntu/ HTTP/1.1\r\nHost: archive.ubuntu.com\r\n\r\n",
+            b"GET http://archive.ubuntu.com/ubuntu/ HTTP/1.1\r\nHost: archive.ubuntu.com\r\nConnection: keep-alive\r\n\r\n",
         )
         assert http_ok.startswith(b"HTTP/1.1 200")
         http_bad = request(
@@ -802,6 +844,16 @@ def test_proxy_allowlist_is_per_service():
             b"GET http://archive.ubuntu.com/ubuntu/ HTTP/1.1\r\nHost: evil.example\r\n\r\n",
         )
         assert http_bad.startswith(b"HTTP/1.1 403")
+        duplicate_host = request(
+            "apt",
+            b"GET http://archive.ubuntu.com/ubuntu/ HTTP/1.1\r\nHost: archive.ubuntu.com\r\nHost: archive.ubuntu.com\r\n\r\n",
+        )
+        assert duplicate_host.startswith(b"HTTP/1.1 400")
+        duplicate_te = request(
+            "apt",
+            b"GET http://archive.ubuntu.com/ubuntu/ HTTP/1.1\r\nHost: archive.ubuntu.com\r\nTransfer-Encoding: chunked\r\nTransfer-Encoding: identity\r\n\r\n",
+        )
+        assert duplicate_te.startswith(b"HTTP/1.1 400")
         mcp = request("policy-gateway", b"CONNECT mcp.example:443 HTTP/1.1\r\nHost: mcp.example:443\r\n\r\n")
         assert mcp.startswith(b"HTTP/1.1 200")
         mcp_bad = request(
@@ -809,8 +861,45 @@ def test_proxy_allowlist_is_per_service():
             b"CONNECT archive.ubuntu.com:443 HTTP/1.1\r\nHost: archive.ubuntu.com:443\r\n\r\n",
         )
         assert mcp_bad.startswith(b"HTTP/1.1 403")
+        hello = _client_hello("login.microsoftonline.com")
+        assert client_hello_sni(hello) == "login.microsoftonline.com"
+        with pytest.raises(SniError) as missing:
+            client_hello_sni(_client_hello(None))
+        assert missing.value.reason == "missing"
+        with pytest.raises(SniError) as ech:
+            client_hello_sni(_client_hello("login.microsoftonline.com", ech=True))
+        assert ech.value.reason == "ech"
+        sock = socket.create_connection(("127.0.0.1", proxy.port_for("openwebui")), timeout=2)
+        sock.settimeout(2)
+        sock.sendall(b"CONNECT login.microsoftonline.com:443 HTTP/1.1\r\nHost: login.microsoftonline.com:443\r\n\r\n")
+        established = b""
+        while b"\r\n\r\n" not in established:
+            established += sock.recv(256)
+        assert established.startswith(b"HTTP/1.1 200")
+        dials_before = len(dialed)
+        sock.sendall(hello)
+        deadline = time.time() + 2
+        while len(forwarded) < 1 and time.time() < deadline:
+            time.sleep(0.01)
+        sock.close()
+        assert forwarded == [hello]
+        assert len(dialed) == dials_before + 1
+        mismatch = socket.create_connection(("127.0.0.1", proxy.port_for("apt")), timeout=2)
+        mismatch.settimeout(2)
+        mismatch.sendall(b"CONNECT archive.ubuntu.com:443 HTTP/1.1\r\nHost: archive.ubuntu.com:443\r\n\r\n")
+        opened = b""
+        while b"\r\n\r\n" not in opened:
+            opened += mismatch.recv(256)
+        assert opened.startswith(b"HTTP/1.1 200")
+        dials_before = len(dialed)
+        mismatch.sendall(_client_hello("evil.example"))
+        assert mismatch.recv(16) == b""
+        mismatch.close()
+        assert len(dialed) == dials_before
     finally:
         proxy.close()
+    assert upstream_http and b"\r\nConnection: close\r\n" in upstream_http[0]
+    assert b"keep-alive" not in upstream_http[0].lower()
     assert ("8.8.8.8", 443) in dialed
     assert ("8.8.8.8", 80) in dialed
     assert ("10.1.2.3", 443) not in dialed
@@ -832,6 +921,10 @@ def test_proxy_allowlist_is_per_service():
     assert "time.cloudflare.com" not in (ROOT / "deploy" / "egress-destinations.yaml").read_text(encoding="utf-8")
     nft_unit = (ROOT / "deploy" / "systemd" / "local-ai-egress-nft.service").read_text(encoding="utf-8")
     assert "Before=network-pre.target" in nft_unit
+    assert "Wants=network-pre.target" in nft_unit
+    assert "WantedBy=sysinit.target" in nft_unit
+    assert "WantedBy=multi-user.target" in nft_unit
+    assert "network-pre.target.wants/local-ai-egress-nft.service" in install
     assert "--nft-only" in (ROOT / "deploy" / "egress-refresh.sh").read_text(encoding="utf-8")
 
 

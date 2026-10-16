@@ -15,7 +15,7 @@ Off-host names are checked by a local forward proxy. nftables decides which uid 
 
 The Presidio analyzer has no off-host destination, so it has no proxy port and no `https_proxy`. `policy-gateway.service` sets `HTTPS_PROXY` to `127.0.0.1:8891` and `NO_PROXY` for loopback. systemd still denies every other address for that unit, so the process cannot dial an MCP host itself.
 
-Ports 8888, 8889, and 8891 accept CONNECT to port 443 only. The CONNECT hostname is the name the client uses as SNI. A Host header, when the client sends one, must be that same name. Port 80 has no SNI. On 8890 it is absolute-form `GET` or `HEAD` (`http://archive.ubuntu.com/...`) and the Host header is required and must match. `pkg.cloudflare.com` is not a destination.
+Ports 8888, 8889, 8890, and 8891 accept CONNECT to port 443. After that 200, the proxy reads one TLS record before it dials. The record must be a ClientHello. The proxy closes the tunnel without dialing when the SNI extension is missing, when the `encrypted_client_hello` extension (type 65037) or the earlier `encrypted_server_name` type 65486 is present, or when the SNI host differs from the CONNECT host. A Host header on the CONNECT request, when the client sends one, must be that same CONNECT host. Port 80 has no TLS. On 8890 it is absolute-form `GET` or `HEAD` (`http://archive.ubuntu.com/...`). Exactly one Host header is required and it must match the URL host. A second Host header or a second Transfer-Encoding header is refused with 400. The request forwarded upstream sets `Connection: close`. `pkg.cloudflare.com` is not a destination.
 
 The proxy resolves the name and dials the first address for which `ip.is_global` is true, after unwrapping an IPv4-mapped address. Multicast is refused. That drops loopback, link-local, RFC1918, CGNAT (`100.64.0.0/10`), IPv6 ULA, and documentation ranges.
 
@@ -55,7 +55,7 @@ The first two fail (proxy 403, then an nftables reject because Open WebUI cannot
 
 ### Reboot
 
-`local-ai-egress-nft.service` is enabled and loads the table before the network is configured (`Before=network-pre.target`). `local-ai-egress-refresh.timer` loads it again about two minutes after boot and every five minutes. A static address is not required: the DHCP and neighbor-discovery accepts above are in that table.
+`local-ai-egress-nft.service` is installed into `sysinit.target` and `multi-user.target`. The unit sets `Wants=network-pre.target` and `Before=network-pre.target`, so boot pulls the filter in and runs it before the network is configured. `local-ai-egress-refresh.timer` loads the table again about two minutes after boot and every five minutes. A static address is not required: the DHCP and neighbor-discovery accepts above are in that table.
 
 ```bash
 systemctl is-enabled local-ai-egress-nft.service
@@ -87,6 +87,24 @@ Each command prints one rule. UFW's IPv4 owner block also accepts UDP sport 68 t
 ```bash
 sudo -u nobody curl -sv --max-time 5 https://archive.ubuntu.com/ || echo "non-owner dropped"
 sudo -u nobody curl -sv --max-time 5 --proxy http://127.0.0.1:8890 https://archive.ubuntu.com/ || echo "non-owner dropped"
+```
+
+### Root on the other proxy ports
+
+`root` may open 8890. nftables rejects that uid on 8888, 8889, and 8891, and those rules are before the loopback accept. Each command fails. The proxy does not answer them.
+
+```bash
+sudo -u root curl -sv --max-time 5 --proxy http://127.0.0.1:8888 https://login.microsoftonline.com/ || echo "root blocked"
+sudo -u root curl -sv --max-time 5 --proxy http://127.0.0.1:8889 https://login.microsoftonline.com/ || echo "root blocked"
+sudo -u root curl -sv --max-time 5 --proxy http://127.0.0.1:8891 https://login.microsoftonline.com/ || echo "root blocked"
+```
+
+### Host mismatch on 8890
+
+`root` can open 8890. This request uses the archive URL and a different Host header. The proxy returns 403.
+
+```bash
+sudo -u root curl -sv --max-time 5 --proxy http://127.0.0.1:8890 --header 'Host: evil.example' http://archive.ubuntu.com/ubuntu/ || echo "host mismatch"
 ```
 
 `python3 scripts/egress_nft.py` prints the rules the apply step loads. Compare that text with `nft list table inet local_ai_egress`.

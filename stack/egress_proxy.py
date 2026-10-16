@@ -5,9 +5,13 @@ Anthropic when the BAA switch is on, and the Azure OpenAI host when that
 name is a single US-region label. Those two ports accept CONNECT to port 443
 only. The apt port (root and _apt) allows the archive, security, and
 Cloudsmith names, plus install-time package hosts while INSTALL_EGRESS=1.
-Port 443 on that listener is CONNECT, which is the name the client will use
-as SNI. Port 80 is absolute-form HTTP and the Host header must match. The
-policy-gateway port allows only the configured StackJack and Composio names.
+Port 443 is CONNECT. After the proxy accepts it, the proxy reads one TLS
+record and refuses a ClientHello whose SNI is missing, whose
+encrypted_client_hello extension is present, or whose SNI differs from the
+CONNECT host. The record is forwarded only after that check. Port 80 is
+absolute-form HTTP: one Host header must match the URL, a repeated Host or
+Transfer-Encoding is refused, and the forwarded request sets Connection: close.
+The policy-gateway port allows only the configured StackJack and Composio names.
 
 The dialed address is the first resolved address for which ip.is_global is
 true, after unwrapping an IPv4-mapped address. Multicast is refused.
@@ -129,6 +133,166 @@ def _split_host_port(target: str) -> tuple[str, int]:
     if not sep:
         raise ValueError("port required")
     return host, int(port_text)
+
+
+# encrypted_client_hello (RFC 9849) and the earlier encrypted_server_name draft.
+_ECH_EXTENSIONS = frozenset({0xFE0D, 0xFFCE})
+
+
+class SniError(Exception):
+    def __init__(self, reason: str):
+        self.reason = reason
+        super().__init__(reason)
+
+
+def client_hello_sni(record: bytes) -> str:
+    """Return the single host_name in a ClientHello record.
+
+    Raises SniError with reason missing, ech, or malformed. The caller compares
+    the name with the CONNECT host.
+    """
+    if len(record) < 5 or record[0] != 0x16:
+        raise SniError("malformed")
+    record_length = int.from_bytes(record[3:5], "big")
+    if record_length != len(record) - 5 or record_length > 16384:
+        raise SniError("malformed")
+    handshake = record[5:]
+    if len(handshake) < 4 or handshake[0] != 0x01:
+        raise SniError("malformed")
+    hello_length = int.from_bytes(handshake[1:4], "big")
+    if hello_length != len(handshake) - 4:
+        raise SniError("malformed")
+    body = handshake[4:]
+    if len(body) < 35:
+        raise SniError("malformed")
+    index = 34
+    session_length = body[index]
+    index += 1
+    if session_length > 32 or index + session_length > len(body):
+        raise SniError("malformed")
+    index += session_length
+    if index + 2 > len(body):
+        raise SniError("malformed")
+    cipher_length = int.from_bytes(body[index : index + 2], "big")
+    index += 2
+    if cipher_length < 2 or cipher_length % 2 or index + cipher_length > len(body):
+        raise SniError("malformed")
+    index += cipher_length
+    if index >= len(body):
+        raise SniError("malformed")
+    compression_length = body[index]
+    index += 1
+    if compression_length < 1 or index + compression_length > len(body):
+        raise SniError("malformed")
+    index += compression_length
+    if index == len(body):
+        raise SniError("missing")
+    if index + 2 > len(body):
+        raise SniError("malformed")
+    extensions_length = int.from_bytes(body[index : index + 2], "big")
+    index += 2
+    if index + extensions_length != len(body):
+        raise SniError("malformed")
+    end = index + extensions_length
+    sni_name: str | None = None
+    saw_ech = False
+    while index < end:
+        if index + 4 > end:
+            raise SniError("malformed")
+        extension_type = int.from_bytes(body[index : index + 2], "big")
+        extension_length = int.from_bytes(body[index + 2 : index + 4], "big")
+        index += 4
+        if index + extension_length > end:
+            raise SniError("malformed")
+        extension = body[index : index + extension_length]
+        index += extension_length
+        if extension_type in _ECH_EXTENSIONS:
+            saw_ech = True
+        elif extension_type == 0:
+            sni_name = _sni_hostname(extension)
+    if saw_ech:
+        raise SniError("ech")
+    if sni_name is None:
+        raise SniError("missing")
+    return sni_name
+
+
+def _sni_hostname(data: bytes) -> str:
+    if len(data) < 5:
+        raise SniError("malformed")
+    list_length = int.from_bytes(data[0:2], "big")
+    if list_length != len(data) - 2:
+        raise SniError("malformed")
+    index = 2
+    names: list[str] = []
+    while index < len(data):
+        if index + 3 > len(data):
+            raise SniError("malformed")
+        name_type = data[index]
+        name_length = int.from_bytes(data[index + 1 : index + 3], "big")
+        index += 3
+        if name_length == 0 or index + name_length > len(data):
+            raise SniError("malformed")
+        raw = data[index : index + name_length]
+        index += name_length
+        if name_type != 0:
+            raise SniError("malformed")
+        try:
+            text = raw.decode("ascii")
+        except UnicodeError as exc:
+            raise SniError("malformed") from exc
+        if any(char.isspace() or char == "\x00" for char in text):
+            raise SniError("malformed")
+        names.append(text.lower().rstrip("."))
+    if len(names) != 1:
+        raise SniError("malformed")
+    return names[0]
+
+
+def _read_tls_record(sock: socket.socket) -> bytes:
+    data = _recv_exact(sock, 5)
+    if data[0] != 0x16:
+        raise SniError("malformed")
+    record_length = int.from_bytes(data[3:5], "big")
+    if record_length == 0 or record_length > 16384:
+        raise SniError("malformed")
+    return data + _recv_exact(sock, record_length)
+
+
+def _recv_exact(sock: socket.socket, size: int) -> bytes:
+    data = b""
+    while len(data) < size:
+        chunk = sock.recv(size - len(data))
+        if not chunk:
+            raise SniError("missing")
+        data += chunk
+    return data
+
+
+def _header_count(head: bytes, name: str) -> int:
+    wanted = name.lower().encode("ascii")
+    count = 0
+    for line in head.split(b"\r\n")[1:]:
+        if b":" not in line:
+            continue
+        key = line.split(b":", 1)[0].strip().lower()
+        if key == wanted:
+            count += 1
+    return count
+
+
+def _rewrite_origin_request(head: bytes, method: str, path: str) -> bytes:
+    """Origin-form request with a single Connection: close."""
+    kept: list[bytes] = []
+    for line in head.split(b"\r\n")[1:]:
+        if not line or b":" not in line:
+            continue
+        key = line.split(b":", 1)[0].strip().lower()
+        if key == b"connection":
+            continue
+        kept.append(line)
+    origin = f"{method} {path} HTTP/1.1".encode("ascii")
+    return b"\r\n".join([origin, *kept, b"Connection: close"]) + b"\r\n\r\n"
 
 
 def _header_value(head: bytes, name: str) -> str | None:
@@ -321,6 +485,9 @@ class EgressProxy:
         except (ValueError, UnicodeError):
             _send_status(client, 400, "Bad Request")
             return None
+        if _header_count(head, "host") > 1 or _header_count(head, "transfer-encoding") > 1:
+            _send_status(client, 400, "Bad Request")
+            return None
         if not matched or not apt_target_allowed(method, host, port, self.raw, self.env):
             _send_status(client, 403, "Forbidden")
             return None
@@ -335,9 +502,17 @@ class EgressProxy:
         if address is None:
             _send_status(client, 403, "Forbidden")
             return None
+        client.sendall(b"HTTP/1.1 200 Connection Established\r\n\r\n")
+        try:
+            record = _read_tls_record(client)
+            presented = client_hello_sni(record)
+        except (SniError, OSError, ValueError):
+            return None
+        if presented != host.strip().lower().rstrip("."):
+            return None
         upstream = self.connect(address, port)
         try:
-            client.sendall(b"HTTP/1.1 200 Connection Established\r\n\r\n")
+            upstream.sendall(record)
             _relay(client, upstream)
         except Exception:
             upstream.close()
@@ -358,9 +533,7 @@ class EgressProxy:
         if address is None:
             _send_status(client, 403, "Forbidden")
             return None
-        lines = head.split(b"\r\n")
-        origin = f"{method} {path} HTTP/1.1".encode("ascii")
-        rewritten = b"\r\n".join([origin, *lines[1:]]) + b"\r\n\r\n" + rest
+        rewritten = _rewrite_origin_request(head, method, path) + rest
         upstream = self.connect(address, port)
         try:
             upstream.sendall(rewritten)
