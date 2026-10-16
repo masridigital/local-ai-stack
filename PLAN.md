@@ -7,7 +7,7 @@ Task: `local-ai-dlp` · Aligned with `/workspace/local-ai-dlp-plan.md` (Red lane
 User (Entra ID SSO + MFA via Conditional Access)
   └─► Open WebUI (OIDC, LAN/VPN only)
         └─► LiteLLM Proxy
-              • model allowlist: HIPAA-compliant API (BAA) + Claude via Bedrock or Vertex (BAA)
+              • model allowlist: anthropic/claude-* ONLY, via Anthropic Claude API directly under Cap's BAA (key via env)
               • Presidio guardrail: pre_call + post_call, default_on: true
               • custom recognizers: MRN, EHR record IDs, account/bank #s, NPI (synthetic-tested)
               • MCP gateway with pre_mcp_call Presidio guardrail
@@ -16,7 +16,7 @@ User (Entra ID SSO + MFA via Conditional Access)
         ├─► presidio-anonymizer (ghcr.io/data-privacy-stack/presidio-anonymizer:<PINNED_TAG>)
         └─► postgres (encrypted volume)
 ```
-All services in Docker Compose on a dedicated VM/VLAN on Cap's on-prem hypervisor. Exposure only via Cloudflare Tunnel + Access (outbound-only, no inbound ports); only redacted data may cross Cloudflare (no BAA); admin UIs reachable only over VPN. Egress allowlist: model API endpoints + Entra only.
+All services in Docker Compose on a dedicated VM/VLAN on Cap's on-prem hypervisor. Exposure only via Cloudflare Tunnel + Access (outbound-only, no inbound ports); only redacted data may cross Cloudflare (no BAA); admin UIs reachable only over VPN. Egress allowlist: api.anthropic.com + Entra only.
 
 ## 2. Repo layout (Phase 1 target)
 - `docker-compose.yml` — all images pinned by tag **and** digest; no `latest`.
@@ -51,3 +51,10 @@ Fixtures in `tests/fixtures/` are generated (Faker + fixed seeds) and labeled `S
 
 ## 5. Out of scope / guardrails for builders
 No deploy, no merge without Marko review, no real credentials, no public exposure, no real data.
+
+## 6. HIPAA-eligible Anthropic configuration
+- Backend: Anthropic Claude API directly under Cap's BAA. No Bedrock/Vertex/other vendors. `ANTHROPIC_API_KEY` (Cap's HIPAA org key) from env/vault only.
+- Allow only BAA-covered endpoints/features; block at LiteLLM (param filtering / allowed routes) everything else — **verify each against Cap's BAA**: beta headers/features, server-side tools (web search, web fetch, code execution), Files API, Message Batches, prompt-caching variants, computer use.
+- Zero-data-retention: enable if part of Cap's agreement — **verify ZDR status**.
+- LiteLLM: `telemetry: False`; no third-party success/failure callbacks (Langfuse, Helicone, etc.); logs local Postgres only. Open WebUI: disable external web search, analytics, community sharing, external model connections.
+- Acceptance test 11: requests with blocked features/beta headers or non-anthropic models are rejected; config check asserts telemetry off and no external callbacks.
