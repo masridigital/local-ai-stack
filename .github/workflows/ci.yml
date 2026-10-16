@@ -22,11 +22,11 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y shellcheck
-          shellcheck deploy/install.sh deploy/apt-repos.sh deploy/write-secret.sh deploy/litellm-run.sh deploy/open-webui-run.sh deploy/break-glass-enable.sh deploy/backup/restic-backup.sh deploy/backup/restic-restore-test.sh
+          shellcheck deploy/install.sh deploy/apt-repos.sh deploy/write-secret.sh deploy/litellm-run.sh deploy/open-webui-run.sh deploy/break-glass-enable.sh deploy/backup/restic-backup.sh deploy/backup/restic-restore-test.sh deploy/backup/restic-alert.sh
       - name: bandit
         run: bandit -r stack scripts -q -ll
       - name: gitleaks
-        uses: gitleaks/gitleaks-action@v2
+        uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7 # v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - name: sbom

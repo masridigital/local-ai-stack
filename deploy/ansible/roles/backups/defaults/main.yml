@@ -3,6 +3,10 @@
 # Timers stay disabled, and the role asserts, until that value is present.
 # The password file is written mode 0600 and owned by root. A missing, empty,
 # or loose file makes the backup and restore-test scripts exit non-zero.
+# backups_extra_env cannot set RESTIC_PASSWORD or RESTIC_PASSWORD_COMMAND.
+# A failed backup starts restic-failure.service, which runs the alert
+# placeholder. That script exits non-zero until backups_alert_hook is an
+# executable absolute path on the host.
 # Chat snapshots are kept 30 days. Audit snapshots are kept for the 6-year
 # HIPAA documentation window. The quarterly timer restores the audit tag only.
 backups_password: ""
@@ -16,3 +20,4 @@ backups_keep_weekly_audit: 4
 backups_keep_monthly_audit: 60
 backups_keep_yearly_audit: 6
 backups_extra_env: {}
+backups_alert_hook: ""

@@ -1,6 +1,11 @@
 [Unit]
-Description=Surface a failed restic backup or restore test
+Description=Alert when a restic backup or restore test fails
 
 [Service]
 Type=oneshot
-ExecStart=/usr/bin/logger -t local-ai-restic -p user.err -- restic failed closed
+# Placeholder: /usr/local/sbin/local-ai-restic-alert exits 1 until
+# backups_alert_hook is an executable. See that script's header.
+{% if backups_alert_hook | trim | length > 0 %}
+Environment=LOCAL_AI_RESTIC_ALERT_HOOK={{ backups_alert_hook }}
+{% endif %}
+ExecStart=/usr/local/sbin/local-ai-restic-alert

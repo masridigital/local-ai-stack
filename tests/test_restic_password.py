@@ -6,6 +6,8 @@ import os
 import subprocess
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = (
     ROOT / "deploy" / "backup" / "restic-backup.sh",
@@ -70,3 +72,17 @@ def test_loose_restic_password_mode_fails_closed(tmp_path: Path) -> None:
         result = _run(script, env_file)
         assert result.returncode != 0, script.name
         assert "mode 0600" in result.stderr
+
+
+def test_restic_password_not_owned_by_root(tmp_path: Path) -> None:
+    if os.geteuid() == 0:
+        pytest.skip("a file created by root is owned by root")
+    password_file = tmp_path / "user-owned-password"
+    password_file.write_text("not-the-secret", encoding="utf-8")
+    password_file.chmod(0o600)
+    env_file = _write_env(tmp_path, password_file)
+
+    for script in SCRIPTS:
+        result = _run(script, env_file)
+        assert result.returncode != 0, script.name
+        assert "owned by root" in result.stderr
