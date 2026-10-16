@@ -1,6 +1,13 @@
-# Native install runbook (Proxmox, Ubuntu Server)
+# Native install runbook (Phase 1 baseline)
 
-This is the operator runbook for the Red lane on Cap’s hypervisor. The install is native: one Ubuntu Server virtual machine, Python virtualenvs under `/opt`, systemd units, and no container runtime. `deploy/install.sh` is idempotent. `ansible/site.yml` repeats the same steps. Do not deploy from a pull request; follow `docs/deploy-checklist.md` before any PHI.
+This is the Phase 1 operator runbook for the Red lane on Cap’s hypervisor. The install is native: one Ubuntu Server virtual machine, Python virtualenvs under `/opt`, systemd units, and no container runtime. `deploy/install.sh` is idempotent. `ansible/site.yml` repeats the same steps. Do not deploy from a pull request; follow `docs/deploy-checklist.md` before any PHI.
+
+Phase 1 decisions this runbook follows:
+
+- `local-ai-stack` stays on-prem, on the VPN, with native installs.
+- The identity provider is Microsoft Entra. Zitadel is a fallback only, not the path this runbook configures.
+- `presidio-redaction-mcp` is hosted in Azure under the Microsoft BAA. It is not installed by `deploy/install.sh`.
+- The optional Claude second-pass verifier lives in `presidio-redaction-mcp`, not on this VM.
 
 PHI users reach Open WebUI over the LAN or WireGuard. They do not reach it through Cloudflare. Cap declined a Cloudflare BAA. `cloudflared` is installed from apt and left disabled.
 

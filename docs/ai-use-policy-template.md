@@ -1,31 +1,38 @@
-# AI-use policy (this system)
+# AI-use policy (Phase 1 baseline)
 
-Template adopted for the local-ai-stack Red lane. Copy forward when the system changes; do not invent a second production path beside it. Not legal advice. Counsel confirms whether HIPAA, 23 NYCRR 500, and the FTC Safeguards Rule apply to a given entity. Marko reviews technical changes before deploy.
+Phase 1 baseline for the local-ai-stack Red lane. Copy forward when the system changes; do not invent a second production path beside it. Not legal advice. Counsel confirms whether HIPAA, 23 NYCRR 500, and the FTC Safeguards Rule apply to a given entity. Marko reviews technical changes before deploy.
+
+Phase 1 decisions:
+
+- `local-ai-stack` stays on-prem, on the VPN, with native installs.
+- The identity provider is Microsoft Entra. Zitadel is a fallback only.
+- `presidio-redaction-mcp` is hosted in Azure under the Microsoft BAA.
+- The optional Claude second-pass verifier lives in `presidio-redaction-mcp`, not in this stack.
 
 | | |
 |---|---|
 | System owner | Joseph Masri (Cap) |
 | Qualified Individual (16 CFR 314.4(a)) | Joseph Masri (Cap) |
 | Security reviewer | Marko, before merge of a control change and before the first deploy |
-| Status | Template for this system. PHI use waits on `docs/deploy-checklist.md` |
+| Status | Phase 1 baseline. PHI use waits on `docs/deploy-checklist.md` |
 
 The Qualified Individual oversees this information-security program, keeps the written risk assessment (`docs/risk-assessment-template.md`), and makes the written report at least annually under [16 CFR 314.4(i)](https://www.ecfr.gov/current/title-16/chapter-I/subchapter-C/part-314/section-314.4). If a DFS Covered Entity names a CISO under 23 NYCRR 500.4, that designation is a separate legal appointment. This policy does not silently merge the two roles.
 
 ## 1. What people may use
 
-Staff reach Open WebUI over the LAN or WireGuard, with Entra ID, MFA, and an 8-hour session. The path is in `PLAN.md` and `docs/runbook.md`.
+Staff reach Open WebUI over the LAN or WireGuard. The identity provider is Microsoft Entra, with MFA and an 8-hour session. Zitadel is a fallback only and is not the sign-in path for this baseline. The path is in `PLAN.md` and `docs/runbook.md`.
 
 | Path | What it is | PHI |
 |---|---|---|
-| Red lane, this repo | Open WebUI → policy gateway → Presidio → LiteLLM → Anthropic (only after the BAA/ZDR checklist) or Azure OpenAI in a US region | Allowed only for people Cap has authorized, and only after the deploy checklist is signed |
-| Yellow lane, other repo | Hosted assistants. Presidio masks before a no-BAA assistant sees a result | Never. Do not paste raw PHI into Grok Bot or any assistant that has no BAA |
+| Red lane, this repo | Open WebUI → policy gateway → Presidio → LiteLLM → Anthropic (gateway switch only, and only after the BAA/ZDR checklist) or Azure OpenAI in a US region. On-prem, VPN, native install | Allowed only for people Cap has authorized, and only after the deploy checklist is signed |
+| Yellow lane, `presidio-redaction-mcp` | Hosted in Azure under the Microsoft BAA. Presidio masks before a no-BAA assistant sees a result. The optional Claude second-pass verifier lives in that repo | Do not paste raw PHI into Grok Bot or any assistant that has no BAA. The Azure host is under Microsoft’s BAA; the no-BAA assistant is not |
 | Anything else (consumer Claude, public chat tools, a Cloudflare hostname, a personal API key) | Not this system | Prohibited for PHI and for nonpublic personal information |
 
 Cloudflare Tunnel is not an access method for this UI. Cap declined a Cloudflare BAA. `cloudflared` stays disabled.
 
 ## 2. Models and switches
 
-- Anthropic: the models named in `litellm/policy.yaml`. `ANTHROPIC_BAA_ENABLED` stays false until `docs/baa-zdr-checklist.md` records that this API key and organization are the BAA organization and that ZDR is on for that organization. Cap confirmed on 2026-10-16 that the signed BAA includes ZDR. The installer does not check the live org.
+- Anthropic: the models named in `litellm/policy.yaml`. `ANTHROPIC_BAA_ENABLED` stays false until `docs/baa-zdr-checklist.md` records that this API key and organization are the BAA organization and that ZDR is on for that organization. Cap confirmed on 2026-10-16 that the signed BAA includes ZDR. The installer does not check the live org. The switch is enforced only in the policy gateway. LiteLLM on `127.0.0.1:4000` does not consult it; that host-level bypass is a tracked P1 for lane L2.
 - Foundry means Azure OpenAI, Microsoft-hosted, provider `azure/`, in a US region listed in `litellm/policy.yaml`, family `gpt-4.1` or `gpt-4o` (including the mini and nano ids in that file). `azure_ai/` marketplace models stay off. Abuse-monitoring opt-out stays off unless Cap already has written approval.
 - Bedrock, Vertex, streaming, Anthropic beta headers, and server-side tools (web search, web fetch, code execution, computer use, Files, Batches) are rejected.
 

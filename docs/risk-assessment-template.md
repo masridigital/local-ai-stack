@@ -1,6 +1,13 @@
-# Risk assessment (this system)
+# Risk assessment (Phase 1 baseline)
 
-Written risk assessment for the Red lane, for 45 CFR 164.308(a)(1)(ii)(A), 23 NYCRR 500.9, and 16 CFR 314.4(b). It is the assessment for this stack, in a form the Qualified Individual can re-sign. It does not replace Cap’s enterprise risk analysis. No real PHI was used to write it.
+Written risk assessment for the Red lane, for 45 CFR 164.308(a)(1)(ii)(A), 23 NYCRR 500.9, and 16 CFR 314.4(b). It is the Phase 1 baseline for this stack, in a form the Qualified Individual can re-sign. It does not replace Cap’s enterprise risk analysis. No real PHI was used to write it.
+
+## Phase 1 baseline
+
+- `local-ai-stack` stays on-prem, on the VPN, with native installs (venv and systemd, not containers).
+- The identity provider is Microsoft Entra. Zitadel is a fallback only.
+- `presidio-redaction-mcp` is hosted in Azure under the Microsoft BAA. It is not this repository.
+- The optional Claude second-pass verifier lives in `presidio-redaction-mcp`, not in this stack.
 
 | | |
 |---|---|
@@ -15,7 +22,7 @@ Score likelihood and impact as low, moderate, or high before the control, then s
 
 ## System and data
 
-Staff with Entra ID and MFA, on the VPN or LAN, use Open WebUI. Caddy terminates TLS on `127.0.0.1` or `VPN_BIND_IP`. The policy gateway calls Presidio, writes a redacted audit row to Postgres, and forwards only allowlisted chat completions to LiteLLM. LiteLLM may call `api.anthropic.com` only when `ANTHROPIC_BAA_ENABLED=true`, and may call a US-region `*.openai.azure.com` host for a first-party `azure/` deployment. Cloudflare is not on this path. The tunnel unit is disabled and its config returns 404.
+Staff with Microsoft Entra and MFA, on the VPN or LAN, use Open WebUI. Caddy terminates TLS on `127.0.0.1` or `VPN_BIND_IP`. The policy gateway calls Presidio, writes a redacted audit row to Postgres, and forwards only allowlisted chat completions to LiteLLM. `ANTHROPIC_BAA_ENABLED` is enforced only in that gateway: when the switch is false, the gateway rejects Anthropic models before it calls LiteLLM. LiteLLM itself does not read the switch, and the `litellm` user is still allowed to open `api.anthropic.com` (`deploy/systemd/litellm.service`, `deploy/egress-destinations.yaml`). A caller on the host who reaches LiteLLM at `127.0.0.1:4000` therefore bypasses the switch. That host-level bypass is a tracked P1; the fix belongs to lane L2 (host hardening). LiteLLM may also call a US-region `*.openai.azure.com` host for a first-party `azure/` deployment. Cloudflare is not on this path. The tunnel unit is disabled and its config returns 404.
 
 Data inventory:
 
@@ -34,7 +41,7 @@ Data inventory:
 | ID | Risk | Likelihood / impact before control | Control that exists now | Left over | Owner |
 |---|---|---|---|---|---|
 | R1 | Raw PHI crosses Cloudflare because TLS terminates there and there is no BAA | High / high if a tunnel publishes Open WebUI | Ingress is VPN/LAN only. Tunnel config has no UI route. `cloudflared` is disabled. Test `test_07_and_09_exposure_and_tunnel` | A later change could add an ingress hostname. POL-CHG-001 and Marko are the brake | Joseph Masri |
-| R2 | Anthropic receives PHI on a key whose org is not the BAA/ZDR org | High / high | Switch defaults off. Checklist requires the live key and org id. Beta tools, Files, and Batches are rejected | The switch can be flipped in `/etc` without a new commit. The checklist is the procedure that forbids that | Joseph Masri |
+| R2 | Anthropic receives PHI on a key whose org is not the BAA/ZDR org, or a host caller skips the gateway | High / high | The gateway switch defaults off (`stack/policy.py`, `stack/server.py`). The checklist requires the live key and org id. Beta tools, Files, and Batches are rejected | The switch is not enforced in LiteLLM or in the host firewall. Direct use of `127.0.0.1:4000` is a tracked P1 for lane L2. The switch can also be flipped in `/etc` without a new commit; the checklist is the procedure that forbids that | Joseph Masri |
 | R3 | Foundry processing leaves the United States, or a marketplace model sits outside Microsoft’s BAA | Moderate / high | `azure/` only, US region list, `*.openai.azure.com`, `azure_ai/` default off. Test `test_foundry_region_and_family` | A Global deployment type can still process outside the US even when the resource region is US. The checklist forbids Global | Joseph Masri |
 | R4 | Presidio misses an identifier and a no-BAA party receives it | Moderate / high | Recall floors on the synthetic corpus, fail-closed, empty MCP allowlist, residual-risk statement | Free-text clinical context and novel obfuscation. Accepted in `docs/residual-risk.md`. A miss that leaves the boundary is an incident | Joseph Masri |
 | R5 | Raw chat on disk or in a Proxmox snapshot | High / moderate (stays inside Cap if LUKS holds) | LUKS, 30-day purge, uploads off | Snapshots and backup keys. Disposal procedure in `docs/retention-disposal.md` | Joseph Masri |
@@ -47,7 +54,7 @@ Data inventory:
 ## Risk management decisions (draft, for the QI to accept)
 
 1. PHI users do not cross Cloudflare. That P0 item from the control map is closed for this repo.
-2. Anthropic stays off until the key and organization are verified. Cap’s statement that the BAA includes ZDR is recorded; it is not a substitute for the console check.
+2. Anthropic stays off in the gateway until the key and organization are verified. Cap’s statement that the BAA includes ZDR is recorded; it is not a substitute for the console check. The switch does not bind the `litellm` user. Closing that host-level bypass is a P1 for lane L2.
 3. Foundry, when used, is Azure OpenAI in a US region, Standard or Data Zone (US), never Global, never `azure_ai/`.
 4. Residual redaction risk in `docs/residual-risk.md` is accepted for the Red lane. It is not accepted as a reason to feed raw PHI to a no-BAA assistant.
 5. Loopback HTTP between units on this VM is accepted for Phase 1. The packets do not leave the host. TLS 1.2+ is required on the Caddy leg and on vendor egress. Revisit if a unit is ever split onto another machine.
