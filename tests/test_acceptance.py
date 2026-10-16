@@ -519,7 +519,8 @@ def test_egress_default_deny():
     assert "region1.v2.argotunnel.com" not in hosts
     assert "pkg.cloudflare.com" not in hosts
     assert "time.cloudflare.com" not in rules
-    assert "0.pool.ntp.org" in hosts
+    assert "ntp.ubuntu.com" in hosts
+    assert "0.pool.ntp.org" not in hosts
     assert "api.anthropic.com" not in hosts
     assert "pypi.org" not in hosts
     assert "huggingface.co" not in hosts

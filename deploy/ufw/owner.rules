@@ -9,9 +9,7 @@
 # proxy for root -> security.ubuntu.com:80/tcp
 # proxy for root -> security.ubuntu.com:443/tcp
 # proxy for root -> dl.cloudsmith.io:443/tcp
-# proxy for systemd-timesync -> 0.pool.ntp.org:123/udp
-# proxy for systemd-timesync -> 1.pool.ntp.org:123/udp
-# proxy for systemd-timesync -> 2.pool.ntp.org:123/udp
+# proxy for systemd-timesync -> ntp.ubuntu.com:123/udp
 -A ufw-before-output -m owner --uid-owner openwebui -d 127.0.0.2 -p tcp --dport 4000 -j REJECT
 -A ufw-before-output -m owner --uid-owner openwebui -d 127.0.0.1 -p tcp --dport 4000 -j REJECT
 -A ufw-before-output -d 127.0.0.1 -p tcp --dport 8888 -m owner ! --uid-owner openwebui -j REJECT

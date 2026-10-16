@@ -22,7 +22,7 @@ Security updates install daily. Automatic reboot is 03:30. Python lock bumps are
 - `qemu-guest-agent` is installed with `guest-exec` and `guest-file` RPCs blocked. Proxmox backups can still freeze the filesystem.
 - `auditd`, AppArmor, and a small sysctl drop-in are installed by the script.
 - Package set is the list in `deploy/services.yaml` (Python, Postgres, Caddy, cloudflared, WireGuard, UFW, unattended-upgrades, restic, openssl). No container engine.
-- `systemd-timesyncd` for time sync. NTP targets in the egress list and in `deploy/systemd/timesyncd.conf.d/local-ai.conf`: `0.pool.ntp.org`, `1.pool.ntp.org`, and `2.pool.ntp.org`, uid `systemd-timesync`. Not a Cloudflare host.
+- `systemd-timesyncd` for time sync. NTP target in the egress list and in `deploy/systemd/timesyncd.conf.d/local-ai.conf`: `ntp.ubuntu.com`, uid `systemd-timesync`. Not a Cloudflare host.
 - WireGuard is installed and left stopped until `/etc/wireguard/wg0.conf` exists (mode 0600, not in git). The example in `deploy/wireguard/` has no private key.
 - Journald `SystemMaxFileSize=10M` and `SystemMaxFiles=5`. LiteLLM is `LITELLM_LOG=ERROR`. Open WebUI `GLOBAL_LOG_LEVEL=WARNING` and audit level is `METADATA` so chat bodies are not written to stdout.
 - Unattended-upgrades come from `host/apt/52local-ai-unattended`: security origins only, reboot at 03:30.

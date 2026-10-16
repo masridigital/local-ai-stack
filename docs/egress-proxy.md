@@ -15,7 +15,7 @@ Off-host names are checked by a local forward proxy. nftables decides which uid 
 
 The Presidio analyzer has no off-host destination, so it has no proxy port and no `https_proxy`. `policy-gateway.service` sets `HTTPS_PROXY` to `127.0.0.1:8891` and `NO_PROXY` for loopback. systemd still denies every other address for that unit, so the process cannot dial an MCP host itself.
 
-Ports 8888, 8889, 8890, and 8891 accept CONNECT to port 443. After that 200, the proxy reads one TLS record before it dials. The record must be a ClientHello. The proxy closes the tunnel without dialing when the SNI extension is missing, when the `encrypted_client_hello` extension (type 65037) or the earlier `encrypted_server_name` type 65486 is present, or when the SNI host differs from the CONNECT host. A Host header on the CONNECT request, when the client sends one, must be that same CONNECT host. Port 80 has no TLS. On 8890 it is absolute-form `GET` or `HEAD` (`http://archive.ubuntu.com/...`). Exactly one Host header is required and it must match the URL host. A second Host header or a second Transfer-Encoding header is refused with 400. The request forwarded upstream sets `Connection: close`. `pkg.cloudflare.com` is not a destination.
+Ports 8888, 8889, 8890, and 8891 accept CONNECT to port 443. After that 200, the proxy reads one TLS record before it dials. The record must be a ClientHello. The proxy closes the tunnel without dialing when the SNI extension is missing, when a duplicate SNI extension is present, when more than one name is listed in that extension, when the `encrypted_client_hello` extension (type 65037) or the earlier `encrypted_server_name` type 65486 is present, or when the SNI host differs from the CONNECT host. The request line and that ClientHello share one deadline of about 10 seconds. A full proxy closes a new connection without a response once 64 connections are already in flight. A Host header on the CONNECT request, when the client sends one, must be that same CONNECT host. Port 80 has no TLS. On 8890 it is absolute-form `GET` or `HEAD` (`http://archive.ubuntu.com/...`). Exactly one Host header is required and it must match the URL host. Any Transfer-Encoding header, a duplicate Content-Length, a duplicate Host, or an obs-fold line is refused with 400. The request forwarded upstream sets `Connection: close`. `pkg.cloudflare.com` is not a destination.
 
 The proxy resolves the name and dials the first address for which `ip.is_global` is true, after unwrapping an IPv4-mapped address. Multicast is refused. That drops loopback, link-local, RFC1918, CGNAT (`100.64.0.0/10`), IPv6 ULA, and documentation ranges.
 
@@ -25,7 +25,7 @@ The same nftables table also accepts:
 
 - `egress-proxy`: TCP 80 and TCP 443, plus UDP/TCP 53, after the name check above
 - `systemd-resolve`: UDP/TCP 53
-- `systemd-timesync`: UDP 123. The client is `systemd-timesyncd` with `NTP=0.pool.ntp.org 1.pool.ntp.org 2.pool.ntp.org` from `deploy/systemd/timesyncd.conf.d/local-ai.conf`. UDP has no SNI. This is not `time.cloudflare.com`.
+- `systemd-timesync`: UDP 123. The client is `systemd-timesyncd` with `NTP=ntp.ubuntu.com` from `deploy/systemd/timesyncd.conf.d/local-ai.conf`. UDP has no SNI. This is not `time.cloudflare.com`.
 - `root`: the `SIEM_PORT` when `SIEM_HOST` is set and the port is not 80 or 443
 - DHCP renew and IPv6 neighbor discovery, with no uid match, so a dynamic address keeps working:
   - `udp sport 68 udp dport 67 accept` (DHCPv4)

@@ -63,12 +63,10 @@ destinations:
   - name: ntp
     users: [systemd-timesync]
     hosts:
-      - 0.pool.ntp.org
-      - 1.pool.ntp.org
-      - 2.pool.ntp.org
+      - ntp.ubuntu.com
     port: 123
     proto: udp
-    purpose: time sync via systemd-timesyncd. Not a Cloudflare host. UDP has no SNI, so the timesyncd drop-in is what the client queries.
+    purpose: time sync via systemd-timesyncd. The client queries ntp.ubuntu.com via the timesyncd drop-in. UDP has no SNI. Not a Cloudflare host.
   - name: azure-openai
     users: [litellm]
     env: AZURE_API_HOST

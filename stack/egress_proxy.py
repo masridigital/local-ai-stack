@@ -6,11 +6,14 @@ name is a single US-region label. Those two ports accept CONNECT to port 443
 only. The apt port (root and _apt) allows the archive, security, and
 Cloudsmith names, plus install-time package hosts while INSTALL_EGRESS=1.
 Port 443 is CONNECT. After the proxy accepts it, the proxy reads one TLS
-record and refuses a ClientHello whose SNI is missing, whose
-encrypted_client_hello extension is present, or whose SNI differs from the
-CONNECT host. The record is forwarded only after that check. Port 80 is
-absolute-form HTTP: one Host header must match the URL, a repeated Host or
-Transfer-Encoding is refused, and the forwarded request sets Connection: close.
+record and refuses a ClientHello whose SNI is missing, whose SNI extension
+is repeated, whose encrypted_client_hello extension is present, or whose SNI
+differs from the CONNECT host. The record is forwarded only after that check.
+The request line and that ClientHello share one deadline of about 10 seconds,
+and the proxy caps how many connections it handles at once. Port 80 is
+absolute-form HTTP: one Host header must match the URL. Any Transfer-Encoding,
+a repeated Content-Length, a repeated Host, or an obs-fold line is refused.
+The forwarded request sets Connection: close.
 The policy-gateway port allows only the configured StackJack and Composio names.
 
 The dialed address is the first resolved address for which ip.is_global is
@@ -24,6 +27,7 @@ import os
 import select
 import socket
 import threading
+import time
 from pathlib import Path
 
 from stack.egress import (
@@ -44,6 +48,9 @@ RUNTIME_LISTENERS = (
 APT_LISTENER = ("apt", 8890)
 MCP_LISTENER = ("policy-gateway", 8891)
 PROXY_LISTENERS = RUNTIME_LISTENERS + (APT_LISTENER, MCP_LISTENER)
+# One clock for the request line and the ClientHello. The later relay is separate.
+HANDSHAKE_DEADLINE = 10.0
+CONNECTION_CAP = 64
 
 
 def bind_address(host: str) -> str:
@@ -148,8 +155,9 @@ class SniError(Exception):
 def client_hello_sni(record: bytes) -> str:
     """Return the single host_name in a ClientHello record.
 
-    Raises SniError with reason missing, ech, or malformed. The caller compares
-    the name with the CONNECT host.
+    Raises SniError with reason missing, duplicate, ech, or malformed.
+    A second extension of type 0 is duplicate. More than one name inside the
+    single SNI extension is malformed.
     """
     if len(record) < 5 or record[0] != 0x16:
         raise SniError("malformed")
@@ -209,6 +217,8 @@ def client_hello_sni(record: bytes) -> str:
         if extension_type in _ECH_EXTENSIONS:
             saw_ech = True
         elif extension_type == 0:
+            if sni_name is not None:
+                raise SniError("duplicate")
             sni_name = _sni_hostname(extension)
     if saw_ech:
         raise SniError("ech")
@@ -249,24 +259,54 @@ def _sni_hostname(data: bytes) -> str:
     return names[0]
 
 
-def _read_tls_record(sock: socket.socket) -> bytes:
-    data = _recv_exact(sock, 5)
+def require_client_hello(record: bytes, expected: str) -> str:
+    """Return the ClientHello SNI when it is the CONNECT host."""
+    presented = client_hello_sni(record)
+    if presented != expected.strip().lower().rstrip("."):
+        raise SniError("mismatch")
+    return presented
+
+
+def _read_tls_record(sock: socket.socket, deadline: float) -> bytes:
+    data = _recv_exact(sock, 5, deadline)
     if data[0] != 0x16:
         raise SniError("malformed")
     record_length = int.from_bytes(data[3:5], "big")
     if record_length == 0 or record_length > 16384:
         raise SniError("malformed")
-    return data + _recv_exact(sock, record_length)
+    return data + _recv_exact(sock, record_length, deadline)
 
 
-def _recv_exact(sock: socket.socket, size: int) -> bytes:
+def _recv_exact(sock: socket.socket, size: int, deadline: float) -> bytes:
     data = b""
     while len(data) < size:
-        chunk = sock.recv(size - len(data))
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise SniError("deadline")
+        sock.settimeout(remaining)
+        try:
+            chunk = sock.recv(size - len(data))
+        except TimeoutError as exc:
+            raise SniError("deadline") from exc
         if not chunk:
             raise SniError("missing")
         data += chunk
     return data
+
+
+def _rejected_http_headers(head: bytes) -> bool:
+    """True when port 80 must answer 400 before the Host check.
+
+    Any Transfer-Encoding, a second Content-Length, a second Host, or an
+    obs-fold line (a header line that begins with space or tab).
+    """
+    if _header_count(head, "host") > 1:
+        return True
+    if _header_count(head, "transfer-encoding") > 0:
+        return True
+    if _header_count(head, "content-length") > 1:
+        return True
+    return any(line[:1] in {b" ", b"\t"} for line in head.split(b"\r\n")[1:])
 
 
 def _header_count(head: bytes, name: str) -> int:
@@ -349,12 +389,18 @@ class EgressProxy:
         connect=None,
         resolve=None,
         bind: str = PROXY_BIND,
+        connection_cap: int = CONNECTION_CAP,
+        handshake_deadline: float = HANDSHAKE_DEADLINE,
     ):
         self.raw = raw
         self.env = env
         self.connect = connect or (lambda host, port: socket.create_connection((host, port), timeout=10))
         self.resolve = resolve or default_resolve
         self.bind_host = bind_address(bind)
+        self.connection_cap = connection_cap
+        self.handshake_deadline = handshake_deadline
+        self._inflight = 0
+        self._inflight_lock = threading.Lock()
         self._stop = threading.Event()
         self.sockets: list[tuple[str, socket.socket]] = []
         for user, port in listeners:
@@ -383,7 +429,20 @@ class EgressProxy:
                     client, _addr = sock.accept()
                 except OSError:
                     continue
-                threading.Thread(target=self._handle, args=(client, user), daemon=True).start()
+                if not self._acquire():
+                    try:
+                        client.close()
+                    except OSError:
+                        pass
+                    continue
+                try:
+                    threading.Thread(target=self._handle, args=(client, user), daemon=True).start()
+                except Exception:
+                    self._release()
+                    try:
+                        client.close()
+                    except OSError:
+                        pass
 
     def close(self) -> None:
         self._stop.set()
@@ -393,13 +452,32 @@ class EgressProxy:
             except OSError:
                 continue
 
+    def _acquire(self) -> bool:
+        with self._inflight_lock:
+            if self._inflight >= self.connection_cap:
+                return False
+            self._inflight += 1
+            return True
+
+    def _release(self) -> None:
+        with self._inflight_lock:
+            if self._inflight > 0:
+                self._inflight -= 1
+
     def _handle(self, client: socket.socket, user: str) -> None:
         upstream = None
         try:
-            client.settimeout(5)
+            deadline = time.monotonic() + self.handshake_deadline
             data = b""
             while b"\r\n\r\n" not in data and len(data) < 8192:
-                chunk = client.recv(4096)
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise SniError("deadline")
+                client.settimeout(remaining)
+                try:
+                    chunk = client.recv(4096)
+                except TimeoutError as exc:
+                    raise SniError("deadline") from exc
                 if not chunk:
                     return
                 data += chunk
@@ -414,12 +492,18 @@ class EgressProxy:
                 return
             method, target = parts[0].upper(), parts[1]
             if user in {"openwebui", "litellm", "policy-gateway"}:
-                upstream = self._connect_request(client, user, method, target, head)
+                upstream = self._connect_request(client, user, method, target, head, deadline)
                 return
             if user == "apt":
-                upstream = self._apt_request(client, method, target, head, rest)
+                upstream = self._apt_request(client, method, target, head, rest, deadline)
                 return
             _send_status(client, 405, "Method Not Allowed")
+        except SniError as exc:
+            if exc.reason == "deadline":
+                try:
+                    _send_status(client, 408, "Request Timeout")
+                except OSError:
+                    return
         except Exception:
             try:
                 _send_status(client, 502, "Bad Gateway")
@@ -433,8 +517,17 @@ class EgressProxy:
                     sock.close()
                 except OSError:
                     continue
+            self._release()
 
-    def _connect_request(self, client: socket.socket, user: str, method: str, target: str, head: bytes):
+    def _connect_request(
+        self,
+        client: socket.socket,
+        user: str,
+        method: str,
+        target: str,
+        head: bytes,
+        deadline: float,
+    ):
         if method != "CONNECT":
             _send_status(client, 405, "Method Not Allowed")
             return None
@@ -458,9 +551,17 @@ class EgressProxy:
         if not allowed:
             _send_status(client, 403, "Forbidden")
             return None
-        return self._tunnel(client, host, port)
+        return self._tunnel(client, host, port, deadline)
 
-    def _apt_request(self, client: socket.socket, method: str, target: str, head: bytes, rest: bytes):
+    def _apt_request(
+        self,
+        client: socket.socket,
+        method: str,
+        target: str,
+        head: bytes,
+        rest: bytes,
+        deadline: float,
+    ):
         if method == "CONNECT":
             try:
                 host, port = _split_host_port(target)
@@ -475,17 +576,21 @@ class EgressProxy:
             if not matched or not apt_target_allowed(method, host, port, self.raw, self.env):
                 _send_status(client, 403, "Forbidden")
                 return None
-            return self._tunnel(client, host, port)
+            return self._tunnel(client, host, port, deadline)
         if method not in {"GET", "HEAD"}:
             _send_status(client, 405, "Method Not Allowed")
             return None
         try:
             host, port, path = absolute_http_target(target)
-            matched = host_header_matches(head, host, required=True)
         except (ValueError, UnicodeError):
             _send_status(client, 400, "Bad Request")
             return None
-        if _header_count(head, "host") > 1 or _header_count(head, "transfer-encoding") > 1:
+        if _rejected_http_headers(head):
+            _send_status(client, 400, "Bad Request")
+            return None
+        try:
+            matched = host_header_matches(head, host, required=True)
+        except (ValueError, UnicodeError):
             _send_status(client, 400, "Bad Request")
             return None
         if not matched or not apt_target_allowed(method, host, port, self.raw, self.env):
@@ -497,18 +602,16 @@ class EgressProxy:
             return None
         return self._forward_http(client, head, rest, method, path, host, port)
 
-    def _tunnel(self, client: socket.socket, host: str, port: int):
+    def _tunnel(self, client: socket.socket, host: str, port: int, deadline: float):
         address = vetted_ip(host, self.resolve)
         if address is None:
             _send_status(client, 403, "Forbidden")
             return None
         client.sendall(b"HTTP/1.1 200 Connection Established\r\n\r\n")
         try:
-            record = _read_tls_record(client)
-            presented = client_hello_sni(record)
+            record = _read_tls_record(client, deadline)
+            require_client_hello(record, host)
         except (SniError, OSError, ValueError):
-            return None
-        if presented != host.strip().lower().rstrip("."):
             return None
         upstream = self.connect(address, port)
         try:
