@@ -1,5 +1,5 @@
-# Owner-matched OUTPUT rules. Service users are rejected off-host.
-# Only the egress-proxy uid may open TCP/80 and TCP/443. The proxy checks the FQDN.
+# Owner-matched OUTPUT rules. Proxy ports are uid-locked before loopback accept.
+# DNS, NTP, apt, optional SIEM, and optional MCP are narrow uid accepts.
 # Hostnames are comments here. They are not firewall matches.
 # proxy for openwebui -> login.microsoftonline.com:443/tcp
 # proxy for openwebui -> login.microsoft.com:443/tcp
@@ -12,9 +12,19 @@
 # proxy for systemd-timesync -> time.cloudflare.com:123/udp
 -A ufw-before-output -m owner --uid-owner openwebui -d 127.0.0.2 -p tcp --dport 4000 -j REJECT
 -A ufw-before-output -m owner --uid-owner openwebui -d 127.0.0.1 -p tcp --dport 4000 -j REJECT
+-A ufw-before-output -d 127.0.0.1 -p tcp --dport 8888 -m owner ! --uid-owner openwebui -j REJECT
+-A ufw-before-output -d 127.0.0.1 -p tcp --dport 8889 -m owner ! --uid-owner litellm -j REJECT
 -A ufw-before-output -o lo -j ACCEPT
--A ufw-before-output -m owner --uid-owner egress-proxy -p tcp --dport 80 -j ACCEPT
 -A ufw-before-output -m owner --uid-owner egress-proxy -p tcp --dport 443 -j ACCEPT
+-A ufw-before-output -m owner --uid-owner egress-proxy -p udp --dport 53 -j ACCEPT
+-A ufw-before-output -m owner --uid-owner egress-proxy -p tcp --dport 53 -j ACCEPT
+-A ufw-before-output -m owner --uid-owner systemd-resolve -p udp --dport 53 -j ACCEPT
+-A ufw-before-output -m owner --uid-owner systemd-resolve -p tcp --dport 53 -j ACCEPT
+-A ufw-before-output -m owner --uid-owner systemd-timesync -p udp --dport 123 -j ACCEPT
+-A ufw-before-output -m owner --uid-owner _apt -p tcp --dport 80 -j ACCEPT
+-A ufw-before-output -m owner --uid-owner _apt -p tcp --dport 443 -j ACCEPT
+-A ufw-before-output -m owner --uid-owner root -p tcp --dport 80 -j ACCEPT
+-A ufw-before-output -m owner --uid-owner root -p tcp --dport 443 -j ACCEPT
 -A ufw-before-output -m owner --uid-owner presidio-analyzer -j REJECT
 -A ufw-before-output -m owner --uid-owner presidio-anonymizer -j REJECT
 -A ufw-before-output -m owner --uid-owner policy-gateway -j REJECT

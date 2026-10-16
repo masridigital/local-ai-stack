@@ -11,7 +11,6 @@ WorkingDirectory=/var/lib/local-ai-stack/egress-proxy
 Environment=PYTHONPATH=/opt/policy-gateway
 Environment=EGRESS_DESTINATIONS=/etc/local-ai-stack/egress-destinations.yaml
 Environment=EGRESS_PROXY_BIND=127.0.0.1
-Environment=EGRESS_PROXY_PORT=8888
 EnvironmentFile=-/etc/local-ai-stack/egress.env
 ExecStart=/opt/policy-gateway/venv/bin/python /usr/local/sbin/local-ai-egress-proxy
 Restart=on-failure

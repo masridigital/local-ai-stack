@@ -261,11 +261,10 @@ if [[ -n "${VPN_SSH_CIDR:-}" ]]; then
 fi
 
 if [[ -n "${AZURE_API_HOST:-}" ]]; then
-  if [[ ! "$AZURE_API_HOST" =~ ^[A-Za-z0-9.-]+\.openai\.azure\.com$ ]]; then
-    echo "AZURE_API_HOST must be a hostname ending in .openai.azure.com" >&2
+  if ! PYTHONPATH="$ROOT" python3 -c 'import os,sys; from stack.egress import azure_host_ok; sys.exit(0 if azure_host_ok(os.environ["AZURE_API_HOST"]) else 1)'; then
+    echo "AZURE_API_HOST must be one label, include a US region, and end in .openai.azure.com" >&2
     exit 1
   fi
-  # Resolved by host/ufw.sh into an owner-matched rule. systemd cannot allow a hostname.
   rm -f /etc/systemd/system/litellm.service.d/azure.conf
 fi
 

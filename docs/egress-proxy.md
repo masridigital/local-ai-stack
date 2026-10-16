@@ -1,30 +1,49 @@
 # Egress hostnames
 
-Off-host TCP from this host goes through a local forward proxy. The proxy allows destinations by FQDN. nftables allows only the `egress-proxy` user to open TCP/80 and TCP/443. Service users talk to `127.0.0.1:8888` and are rejected if they dial anywhere else.
+Off-host names are checked by a local forward proxy. nftables decides which uid may open which path. The proxy does not carry apt, Cloudsmith, `pkg.cloudflare.com`, SIEM, StackJack, or Composio.
 
-## Proxy
+## Ports
 
-`egress-proxy.service` runs `deploy/egress-proxy.py` as `egress-proxy` on `127.0.0.1:8888`. It loads `deploy/egress-destinations.yaml` and `/etc/local-ai-stack/egress.env`.
+`egress-proxy.service` listens on loopback only:
 
-Allowed names:
+| Port | UID nftables allows onto that port | Names the proxy will CONNECT |
+|---|---|---|
+| `127.0.0.1:8888` | `openwebui` | `login.microsoftonline.com`, `login.microsoft.com` |
+| `127.0.0.1:8889` | `litellm` | `api.anthropic.com` only when `ANTHROPIC_BAA_ENABLED=true`; `AZURE_API_HOST` when that name is a single label ending in `.openai.azure.com` and one hyphen-separated token is a US region in `litellm/policy.yaml` |
 
-- Entra: `login.microsoftonline.com` and `login.microsoft.com` on port 443.
-- Anthropic: `api.anthropic.com` only when `ANTHROPIC_BAA_ENABLED=true`.
-- The Azure OpenAI host on the Presidio-gated path: `AZURE_API_HOST` when it is set, and only if the name ends in `.openai.azure.com`.
+The Presidio analyzer has no off-host destination, so it has no proxy port and no `https_proxy`.
 
-IP literals are refused. A name that is not on the list is refused before the proxy dials it.
+CONNECT to port 443 is the only accepted method. The proxy resolves the name and dials the first address that is not loopback, link-local, RFC1918, CGNAT (`100.64.0.0/10`), or IPv6 ULA. Any other answer is refused.
 
-LiteLLM, Open WebUI, and the Presidio analyzer set `https_proxy` to that listener. `NO_PROXY` keeps loopback traffic (Presidio, the gateway, Postgres, LiteLLM) off the proxy.
+## Other uids
 
-## Firewall
+The same nftables table also accepts:
 
-`scripts/egress_nft.py` renders table `inet local_ai_egress`:
+- `systemd-resolve` and `egress-proxy`: UDP/TCP 53
+- `systemd-timesync`: UDP 123
+- `_apt` and `root`: TCP 80 and TCP 443, for apt and unattended-upgrades
+- `root`: the `SIEM_PORT` when `SIEM_HOST` is set and the port is not 80 or 443
+- `policy-gateway`: TCP 443 only when `STACKJACK_MCP_HOST` or `COMPOSIO_MCP_HOST` is set
 
-- established traffic is accepted
-- TCP/4000 to `127.0.0.2` and `127.0.0.1` is rejected before the loopback accept
-- other loopback traffic is accepted
-- TCP/80 and TCP/443 are accepted only for uid `egress-proxy`
+Those rows are not in the proxy allowlist.
 
-UFW stays default deny. Owner rules reject `litellm`, `openwebui`, and the other service users. They accept off-host TCP only for `egress-proxy`. `local-ai-egress-refresh.timer` reloads that table and restarts the proxy. It does not pin CDN addresses.
+## Verify on the VM
 
-NTP is not an HTTP CONNECT flow. It is not opened by this table.
+After `deploy/install.sh --apply`:
+
+```bash
+nft list table inet local_ai_egress
+ss -ltnp | awk '/127.0.0.1:8888|127.0.0.1:8889/'
+```
+
+The table should show the `8888` reject for every uid except `openwebui`, the `8889` reject for every uid except `litellm`, both of those before `oifname "lo" accept`, and the skuid accepts above.
+
+```bash
+sudo -u openwebui curl -sv --max-time 5 --proxy http://127.0.0.1:8888 https://api.anthropic.com/
+sudo -u openwebui curl -sv --max-time 5 --proxy http://127.0.0.1:8889 https://api.anthropic.com/
+sudo -u litellm curl -sv --max-time 5 --proxy http://127.0.0.1:8889 https://login.microsoftonline.com/
+```
+
+The first two fail (proxy 403, then an nftables reject because Open WebUI cannot open 8889). The third fails with proxy 403. A CONNECT from `openwebui` to `https://login.microsoftonline.com/` through port 8888 is the one that the proxy accepts.
+
+`python3 scripts/egress_nft.py` prints the rules the apply step loads. Compare that text with `nft list table inet local_ai_egress`.

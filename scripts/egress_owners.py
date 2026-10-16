@@ -109,8 +109,8 @@ def render_owner_rules(raw: dict, resolutions: dict[str, list[str]], env: dict[s
     env = env or {}
     active = active_destinations(raw, env)
     lines = [
-        "# Owner-matched OUTPUT rules. Service users are rejected off-host.",
-        "# Only the egress-proxy uid may open TCP/80 and TCP/443. The proxy checks the FQDN.",
+        "# Owner-matched OUTPUT rules. Proxy ports are uid-locked before loopback accept.",
+        "# DNS, NTP, apt, optional SIEM, and optional MCP are narrow uid accepts.",
         "# Hostnames are comments here. They are not firewall matches.",
     ]
     for item in active:
@@ -119,13 +119,28 @@ def render_owner_rules(raw: dict, resolutions: dict[str, list[str]], env: dict[s
             for port in _ports(item, env):
                 lines.append(f"# proxy for {users} -> {host}:{port}/{item['proto']}")
     lines.extend(LITELLM_DENY)
+    lines.append(
+        "-A ufw-before-output -d 127.0.0.1 -p tcp --dport 8888 -m owner ! --uid-owner openwebui -j REJECT"
+    )
+    lines.append(
+        "-A ufw-before-output -d 127.0.0.1 -p tcp --dport 8889 -m owner ! --uid-owner litellm -j REJECT"
+    )
     lines.append("-A ufw-before-output -o lo -j ACCEPT")
-    lines.append(
-        f"-A ufw-before-output -m owner --uid-owner {PROXY_USER} -p tcp --dport 80 -j ACCEPT"
-    )
-    lines.append(
-        f"-A ufw-before-output -m owner --uid-owner {PROXY_USER} -p tcp --dport 443 -j ACCEPT"
-    )
+    lines.append(f"-A ufw-before-output -m owner --uid-owner {PROXY_USER} -p tcp --dport 443 -j ACCEPT")
+    lines.append(f"-A ufw-before-output -m owner --uid-owner {PROXY_USER} -p udp --dport 53 -j ACCEPT")
+    lines.append(f"-A ufw-before-output -m owner --uid-owner {PROXY_USER} -p tcp --dport 53 -j ACCEPT")
+    lines.append("-A ufw-before-output -m owner --uid-owner systemd-resolve -p udp --dport 53 -j ACCEPT")
+    lines.append("-A ufw-before-output -m owner --uid-owner systemd-resolve -p tcp --dport 53 -j ACCEPT")
+    lines.append("-A ufw-before-output -m owner --uid-owner systemd-timesync -p udp --dport 123 -j ACCEPT")
+    lines.append("-A ufw-before-output -m owner --uid-owner _apt -p tcp --dport 80 -j ACCEPT")
+    lines.append("-A ufw-before-output -m owner --uid-owner _apt -p tcp --dport 443 -j ACCEPT")
+    lines.append("-A ufw-before-output -m owner --uid-owner root -p tcp --dport 80 -j ACCEPT")
+    lines.append("-A ufw-before-output -m owner --uid-owner root -p tcp --dport 443 -j ACCEPT")
+    if env.get("STACKJACK_MCP_HOST", "").strip() or env.get("COMPOSIO_MCP_HOST", "").strip():
+        lines.append("-A ufw-before-output -m owner --uid-owner policy-gateway -p tcp --dport 443 -j ACCEPT")
+    siem_port = env.get("SIEM_PORT", "").strip()
+    if env.get("SIEM_HOST", "").strip() and siem_port.isdigit() and siem_port not in {"80", "443"}:
+        lines.append(f"-A ufw-before-output -m owner --uid-owner root -p tcp --dport {int(siem_port)} -j ACCEPT")
     for user in DIRECT_DENY_USERS:
         lines.append(f"-A ufw-before-output -m owner --uid-owner {user} -j REJECT")
     if resolutions:

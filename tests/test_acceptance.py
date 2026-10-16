@@ -378,6 +378,8 @@ def test_07_and_09_exposure_and_tunnel():
     azure_env = {"AZURE_API_HOST": "cap-eastus2.openai.azure.com"}
     assert host_allowed("cap-eastus2.openai.azure.com", egress, azure_env)
     assert not host_allowed("other.openai.azure.com", egress, azure_env)
+    assert not host_allowed("not-a-region.openai.azure.com", egress, {"AZURE_API_HOST": "not-a-region.openai.azure.com"})
+    assert not host_allowed("a.b.openai.azure.com", egress, {"AZURE_API_HOST": "a.b.openai.azure.com"})
 
 
 def test_08_secrets_are_files_not_env():

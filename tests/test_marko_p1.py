@@ -394,8 +394,9 @@ def test_user_groups_header_stays_comma_separated():
     timer = (ROOT / "deploy" / "systemd" / "local-ai-egress-refresh.timer").read_text(encoding="utf-8")
     assert "OnUnitActiveSec=5min" in timer
     design = (ROOT / "docs" / "egress-proxy.md").read_text(encoding="utf-8")
-    assert "egress-proxy" in design
     assert "127.0.0.1:8888" in design
+    assert "127.0.0.1:8889" in design
+    assert "Verify on the VM" in design
 
 
 def test_litellm_port_4000_is_gated():
@@ -470,15 +471,25 @@ def test_nft_rejects_litellm_before_loopback_accept():
     loopback = rules.index('oifname "lo" accept')
     assert rules.index("ip daddr 127.0.0.2 tcp dport 4000 reject") < loopback
     assert rules.index("ip daddr 127.0.0.1 tcp dport 4000 reject") < loopback
-    proxy_accept = rules.index("meta skuid egress-proxy tcp dport { 80, 443 } accept")
-    assert proxy_accept > loopback
-    assert rules.count("meta skuid") == 1
-    subprocess.run(
-        ["sudo", "useradd", "--system", "--shell", "/usr/sbin/nologin", "egress-proxy"],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
+    assert rules.index("tcp dport 8888 meta skuid != openwebui reject") < loopback
+    assert rules.index("tcp dport 8889 meta skuid != litellm reject") < loopback
+    assert "meta skuid egress-proxy tcp dport 443 accept" in rules
+    assert "meta skuid systemd-resolve meta l4proto { tcp, udp } th dport 53 accept" in rules
+    assert "meta skuid systemd-timesync udp dport 123 accept" in rules
+    assert "meta skuid _apt tcp dport { 80, 443 } accept" in rules
+    assert "meta skuid root tcp dport { 80, 443 } accept" in rules
+    assert "policy-gateway" not in rules
+    mcp = render_nft({"STACKJACK_MCP_HOST": "mcp.example"})
+    assert "meta skuid policy-gateway tcp dport 443 accept" in mcp
+    siem = render_nft({"SIEM_HOST": "siem.example", "SIEM_PORT": "6514"})
+    assert "meta skuid root tcp dport 6514 accept" in siem
+    for user in ("egress-proxy", "openwebui", "litellm", "systemd-resolve", "systemd-timesync", "policy-gateway"):
+        subprocess.run(
+            ["sudo", "useradd", "--system", "--shell", "/usr/sbin/nologin", user],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
     checked = subprocess.run(
         ["sudo", "nft", "-c", "-f", "-"],
         input=rules,
@@ -629,26 +640,44 @@ def test_gateway_strips_forwarded_name_and_email(monkeypatch):
     assert recorded.get("x-litellm-team-id") == "phi"
 
 
-def test_proxy_connects_only_to_allowlisted_names():
+def test_proxy_allowlist_is_per_service():
     import socket
 
-    from stack.egress import load_destinations
-    from stack.egress_proxy import EgressProxy, connect_allowed
+    from stack.egress import azure_host_ok, load_destinations, proxy_host_allowed
+    from stack.egress_proxy import RUNTIME_LISTENERS, EgressProxy, bind_address, connect_allowed, forbidden_ip
 
     raw = load_destinations(ROOT / "deploy" / "egress-destinations.yaml")
-    assert connect_allowed("login.microsoftonline.com", 443, raw, {})
-    assert connect_allowed("login.microsoft.com", 443, raw, {})
-    assert not connect_allowed("api.anthropic.com", 443, raw, {})
-    assert connect_allowed("api.anthropic.com", 443, raw, {"ANTHROPIC_BAA_ENABLED": "true"})
-    assert not connect_allowed("cap-eastus2.openai.azure.com", 443, raw, {})
-    assert connect_allowed(
-        "cap-eastus2.openai.azure.com",
-        443,
-        raw,
-        {"AZURE_API_HOST": "cap-eastus2.openai.azure.com"},
-    )
-    assert not connect_allowed("192.0.2.10", 443, raw, {"AZURE_API_HOST": "cap-eastus2.openai.azure.com"})
-    assert not connect_allowed("example.com", 443, raw, {})
+    env = {"ANTHROPIC_BAA_ENABLED": "true", "AZURE_API_HOST": "cap-eastus2.openai.azure.com", "INSTALL_EGRESS": "1"}
+    assert connect_allowed("login.microsoftonline.com", 443, raw, env, "openwebui")
+    assert not connect_allowed("api.anthropic.com", 443, raw, env, "openwebui")
+    assert not connect_allowed("cap-eastus2.openai.azure.com", 443, raw, env, "openwebui")
+    assert connect_allowed("api.anthropic.com", 443, raw, env, "litellm")
+    assert connect_allowed("cap-eastus2.openai.azure.com", 443, raw, env, "litellm")
+    assert not connect_allowed("login.microsoftonline.com", 443, raw, env, "litellm")
+    assert not connect_allowed("api.anthropic.com", 80, raw, env, "litellm")
+    for blocked in ("pypi.org", "dl.cloudsmith.io", "pkg.cloudflare.com", "archive.ubuntu.com"):
+        assert not proxy_host_allowed(blocked, "litellm", raw, env)
+        assert not proxy_host_allowed(blocked, "openwebui", raw, env)
+        assert not proxy_host_allowed(blocked, "presidio-analyzer", raw, env)
+    assert not proxy_host_allowed("mcp.example", "policy-gateway", raw, {"STACKJACK_MCP_HOST": "mcp.example"})
+    assert "presidio-analyzer" not in {user for user, _port in RUNTIME_LISTENERS}
+    assert azure_host_ok("cap-eastus2.openai.azure.com")
+    assert not azure_host_ok("not-a-region.openai.azure.com")
+    assert not azure_host_ok("a.b.openai.azure.com")
+    assert not azure_host_ok("foo..eastus2.openai.azure.com")
+    assert not azure_host_ok("lab-westeurope.openai.azure.com")
+    assert forbidden_ip("127.0.0.1")
+    assert forbidden_ip("10.1.2.3")
+    assert forbidden_ip("192.168.1.1")
+    assert forbidden_ip("100.64.0.1")
+    assert forbidden_ip("169.254.1.1")
+    assert forbidden_ip("fd00::1")
+    assert not forbidden_ip("203.0.113.10")
+    with pytest.raises(SystemExit):
+        bind_address("0.0.0.0")
+    with pytest.raises(SystemExit):
+        bind_address("::")
+    assert bind_address("127.0.0.1") == "127.0.0.1"
     dialed: list[tuple[str, int]] = []
 
     def connect(host: str, port: int):
@@ -657,17 +686,19 @@ def test_proxy_connects_only_to_allowlisted_names():
         right.close()
         return left
 
-    proxy = EgressProxy(
-        raw,
-        {"ANTHROPIC_BAA_ENABLED": "true", "AZURE_API_HOST": "cap-eastus2.openai.azure.com"},
-        connect=connect,
-    )
+    def resolve(host: str) -> list[str]:
+        if host == "api.anthropic.com":
+            return ["10.1.2.3", "192.168.0.5", "100.64.0.8", "fd00::2"]
+        return ["203.0.113.10", "127.0.0.1"]
+
+    proxy = EgressProxy(raw, env, connect=connect, resolve=resolve)
+    assert all(sock.getsockname()[0] == "127.0.0.1" for _user, sock in proxy.sockets)
     thread = threading.Thread(target=proxy.serve_forever, daemon=True)
     thread.start()
 
-    def request(target: str) -> bytes:
-        sock = socket.create_connection(("127.0.0.1", proxy.port), timeout=2)
-        sock.sendall(f"CONNECT {target} HTTP/1.1\r\nHost: {target}\r\n\r\n".encode())
+    def request(user: str, payload: bytes) -> bytes:
+        sock = socket.create_connection(("127.0.0.1", proxy.port_for(user)), timeout=2)
+        sock.sendall(payload)
         data = b""
         while b"\r\n" not in data:
             chunk = sock.recv(256)
@@ -678,22 +709,37 @@ def test_proxy_connects_only_to_allowlisted_names():
         return data
 
     try:
-        assert request("login.microsoftonline.com:443").startswith(b"HTTP/1.1 200")
-        assert request("api.anthropic.com:443").startswith(b"HTTP/1.1 200")
-        assert request("cap-eastus2.openai.azure.com:443").startswith(b"HTTP/1.1 200")
-        assert request("example.com:443").startswith(b"HTTP/1.1 403")
-        assert request("192.0.2.10:443").startswith(b"HTTP/1.1 403")
+        entra = request("openwebui", b"CONNECT login.microsoftonline.com:443 HTTP/1.1\r\nHost: login.microsoftonline.com:443\r\n\r\n")
+        assert entra.startswith(b"HTTP/1.1 200")
+        denied = request("openwebui", b"CONNECT api.anthropic.com:443 HTTP/1.1\r\nHost: api.anthropic.com:443\r\n\r\n")
+        assert denied.startswith(b"HTTP/1.1 403")
+        azure_denied = request(
+            "openwebui",
+            b"CONNECT cap-eastus2.openai.azure.com:443 HTTP/1.1\r\nHost: cap-eastus2.openai.azure.com:443\r\n\r\n",
+        )
+        assert azure_denied.startswith(b"HTTP/1.1 403")
+        private = request("litellm", b"CONNECT api.anthropic.com:443 HTTP/1.1\r\nHost: api.anthropic.com:443\r\n\r\n")
+        assert private.startswith(b"HTTP/1.1 403")
+        azure = request(
+            "litellm",
+            b"CONNECT cap-eastus2.openai.azure.com:443 HTTP/1.1\r\nHost: cap-eastus2.openai.azure.com:443\r\n\r\n",
+        )
+        assert azure.startswith(b"HTTP/1.1 200")
+        wrong_port = request("litellm", b"CONNECT cap-eastus2.openai.azure.com:80 HTTP/1.1\r\nHost: cap-eastus2.openai.azure.com:80\r\n\r\n")
+        assert wrong_port.startswith(b"HTTP/1.1 403")
+        get = request("litellm", b"GET http://cap-eastus2.openai.azure.com/ HTTP/1.1\r\nHost: cap-eastus2.openai.azure.com\r\n\r\n")
+        assert get.startswith(b"HTTP/1.1 405")
     finally:
         proxy.close()
-    assert ("example.com", 443) not in dialed
-    assert ("login.microsoftonline.com", 443) in dialed
-    assert ("api.anthropic.com", 443) in dialed
-    assert ("cap-eastus2.openai.azure.com", 443) in dialed
+    assert ("203.0.113.10", 443) in dialed
+    assert ("10.1.2.3", 443) not in dialed
+    assert ("127.0.0.1", 443) not in dialed
     litellm = (ROOT / "deploy" / "systemd" / "litellm.service").read_text(encoding="utf-8")
     webui = (ROOT / "deploy" / "systemd" / "open-webui.service").read_text(encoding="utf-8")
     analyzer = (ROOT / "deploy" / "systemd" / "presidio-analyzer.service").read_text(encoding="utf-8")
-    for unit in (litellm, webui, analyzer):
-        assert "HTTPS_PROXY=http://127.0.0.1:8888" in unit
+    assert "HTTPS_PROXY=http://127.0.0.1:8889" in litellm
+    assert "HTTPS_PROXY=http://127.0.0.1:8888" in webui
+    assert "HTTPS_PROXY=" not in analyzer
 
 
 def test_open_webui_refuses_zero_client_id():

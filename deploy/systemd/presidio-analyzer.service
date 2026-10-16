@@ -12,11 +12,6 @@ Environment=PYTHONDONTWRITEBYTECODE=1
 Environment=BIND_HOST=127.0.0.1
 Environment=PORT=3000
 Environment=LOG_LEVEL=ERROR
-Environment=http_proxy=http://127.0.0.1:8888
-Environment=https_proxy=http://127.0.0.1:8888
-Environment=HTTP_PROXY=http://127.0.0.1:8888
-Environment=HTTPS_PROXY=http://127.0.0.1:8888
-Environment=NO_PROXY=127.0.0.1,127.0.0.2,localhost
 ExecStart=/opt/presidio-analyzer/venv/bin/gunicorn -w 1 -b 127.0.0.1:3000 --log-level error app:create_app()
 Restart=on-failure
 RestartSec=5
