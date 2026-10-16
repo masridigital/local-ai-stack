@@ -20,7 +20,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y shellcheck
-          shellcheck deploy/install.sh deploy/apt-repos.sh deploy/write-secret.sh deploy/litellm-run.sh deploy/open-webui-run.sh deploy/break-glass-enable.sh
+          shellcheck deploy/install.sh deploy/apt-repos.sh deploy/write-secret.sh deploy/litellm-run.sh deploy/open-webui-run.sh deploy/break-glass-enable.sh host/install.sh host/ufw.sh host/luks-data.sh host/secrets/populate.sh
       - name: bandit
         run: bandit -r stack scripts -q -ll
       - name: gitleaks

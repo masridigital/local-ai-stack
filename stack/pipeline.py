@@ -14,6 +14,8 @@ from stack.policy import (
     blocked_header,
     blocked_tools,
     classify_model,
+    resolve_entra_team,
+    resolve_model,
     unexpected_params,
 )
 from stack.presidio_client import PresidioClient
@@ -22,11 +24,13 @@ from stack.presidio_client import PresidioClient
 @dataclass
 class Upstream:
     calls: list[dict] = field(default_factory=list)
+    team_ids: list[str | None] = field(default_factory=list)
 
-    def complete(self, payload: dict) -> dict:
+    def complete(self, payload: dict, team_id: str | None = None) -> dict:
         payload = dict(payload)
         content = payload.pop("_mock_response", None)
         self.calls.append(payload)
+        self.team_ids.append(team_id)
         if content is None:
             content = "synthetic ok"
         return {
@@ -101,15 +105,17 @@ def handle_chat(
     model = body.get("model")
     if not isinstance(model, str):
         raise PolicyError("model_not_allowlisted", "model is required")
+    litellm_model, provider_model = resolve_model(model, policy, foundry)
     try:
-        backend = classify_model(model, policy, foundry)
+        backend = classify_model(provider_model, policy, foundry)
+        team_id = resolve_entra_team(headers, litellm_model, provider_model, policy)
     except PolicyError as exc:
         audit.write(
             event_type="request",
             decision="block",
             user_id=user_id,
             route=route,
-            model=model,
+            model=litellm_model,
             reason=exc.code,
         )
         raise
@@ -130,17 +136,24 @@ def handle_chat(
         )
         raise
     forward = {
-        "model": model,
+        "model": litellm_model,
         "messages": masked_messages,
         "stream": False,
     }
-    for key in ("max_tokens", "temperature", "top_p", "stop", "user"):
+    for key in ("max_tokens", "temperature", "top_p", "stop"):
         if key in body:
             forward[key] = body[key]
+    if "user" in body:
+        masked_user, found = _mask_obj(body["user"], presidio)
+        forward["user"] = masked_user
+        entities.extend(found)
     if mock_response is not None:
         forward["_mock_response"] = mock_response
     # Abuse-monitoring opt-out is not sent. Cap has not asked us to assume it.
-    raw = upstream.complete({key: value for key, value in forward.items() if key == "_mock_response" or not key.startswith("_")})
+    raw = upstream.complete(
+        {key: value for key, value in forward.items() if key == "_mock_response" or not key.startswith("_")},
+        team_id=team_id or None,
+    )
     content = _assistant_text(raw)
     try:
         masked_content, response_entities = presidio.mask_text(content)
@@ -268,6 +281,12 @@ def _mask_messages(messages: list, presidio: PresidioClient) -> tuple[list, list
             new_message["content"] = parts
         else:
             raise PolicyError("non_text_blocked", "message content must be text")
+        for key, value in list(new_message.items()):
+            if key in {"role", "content"}:
+                continue
+            masked_value, found = _mask_obj(value, presidio)
+            new_message[key] = masked_value
+            entities.extend(found)
         masked.append(new_message)
     return masked, entities
 

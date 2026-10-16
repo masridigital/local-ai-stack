@@ -4,6 +4,8 @@
 mask_score_threshold: 0.4
 streaming_enabled: false
 anthropic_baa_enabled: false
+# Cap attested in chat on 2026-10-15 that the BAA includes ZDR ("BAA has ZDR").
+# Formal document verification is still pending at Cap's review. Leave this true.
 anthropic_zdr_confirmed_by_cap: true
 anthropic_allowed_models:
   - anthropic/claude-sonnet-4-5
@@ -82,3 +84,31 @@ audit_review:
   sample_cadence: weekly
   access_review: quarterly
   reviewer: designated security reviewer
+model_aliases:
+  claude-sonnet: anthropic/claude-sonnet-4-5
+  claude-haiku: anthropic/claude-haiku-4-5
+  claude-opus: anthropic/claude-opus-4-5
+  foundry-gpt: azure
+entra:
+  tenant_id: f7812296-5bce-41dc-8102-b1b270e7c4c7
+  issuer: https://login.microsoftonline.com/f7812296-5bce-41dc-8102-b1b270e7c4c7/v2.0
+  enforce_roles: true
+  role_header: X-Entra-App-Roles
+  teams:
+    phi:
+      team_id: phi
+      models:
+        - claude-sonnet
+        - claude-haiku
+        - claude-opus
+        - foundry-gpt
+        - anthropic/claude-sonnet-4-5
+        - anthropic/claude-haiku-4-5
+        - anthropic/claude-opus-4-5
+        - azure/*
+        - azure_ai/*
+    non-phi:
+      team_id: non-phi
+      models:
+        - claude-haiku
+        - anthropic/claude-haiku-4-5

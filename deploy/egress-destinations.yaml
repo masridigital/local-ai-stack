@@ -6,7 +6,10 @@ destinations:
     hosts: [api.anthropic.com]
     port: 443
     proto: tcp
-    purpose: Anthropic Claude API under Cap's BAA, including ZDR
+    optional: true
+    env: ANTHROPIC_BAA_ENABLED
+    env_value: "true"
+    purpose: Anthropic Claude API under Cap's BAA, including ZDR. Omitted unless the switch is on.
   - name: entra
     users: [openwebui]
     hosts:
@@ -30,7 +33,8 @@ destinations:
       - files.pythonhosted.org
     port: 443
     proto: tcp
-    purpose: hashed pip installs during apply, as root
+    install_only: true
+    purpose: hashed pip installs during apply, as root. Dropped after install.
   - name: caddy-apt
     users: [root]
     hosts: [dl.cloudsmith.io]
@@ -50,7 +54,8 @@ destinations:
       - release-assets.githubusercontent.com
     port: 443
     proto: tcp
-    purpose: pinned en_core_web_lg wheel during apply, as root
+    install_only: true
+    purpose: pinned en_core_web_lg wheel during apply, as root. Dropped after install.
   - name: embedding-model
     users: [root]
     hosts:
@@ -59,7 +64,8 @@ destinations:
       - cas-bridge.xethub.hf.co
     port: 443
     proto: tcp
-    purpose: one-time local MiniLM download during apply; the openwebui user cannot reach these hosts
+    install_only: true
+    purpose: one-time local MiniLM download during apply. Dropped after install. The openwebui user cannot reach these hosts.
   - name: ntp
     users: [systemd-timesync]
     hosts: [time.cloudflare.com]

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hmac
 import json
 import os
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -11,12 +12,34 @@ from stack.audit import AuditLog, PostgresAudit
 from stack.errors import PolicyError
 from stack.masking import load_recognizers
 from stack.pipeline import handle_chat, record_config_change
-from stack.upstream import LiteLLMUpstream
 from stack.policy import FoundryRuntime, load_policy
 from stack.presidio_client import PresidioClient
-
+from stack.upstream import LiteLLMUpstream
 
 ROOT = Path(os.environ.get("STACK_ROOT", "/app"))
+MAX_CONTENT_LENGTH = 1_048_576
+IPV6_WILDCARD = frozenset({"::", "::0"})
+
+
+def checked_content_length(raw: str | None) -> int:
+    if raw is None or raw == "":
+        return 0
+    try:
+        length = int(raw)
+    except ValueError as exc:
+        raise PolicyError("invalid_content_length", "Content-Length must be an integer", status=400) from exc
+    if length < 0 or length > MAX_CONTENT_LENGTH:
+        raise PolicyError("body_too_large", "request body exceeds limit", status=413)
+    return length
+
+
+def bearer_matches(authorization: str | None, secret: str) -> bool:
+    if not secret or not authorization:
+        return False
+    scheme, _, token = authorization.partition(" ")
+    if scheme.lower() != "bearer" or not token:
+        return False
+    return hmac.compare_digest(token, secret)
 
 
 def build_deps():
@@ -65,7 +88,15 @@ class Handler(BaseHTTPRequestHandler):
         self._send(403, {"error": {"code": "route_disabled", "message": "route is not enabled"}})
 
     def do_POST(self):  # noqa: N802
-        length = int(self.headers.get("Content-Length", "0"))
+        try:
+            length = checked_content_length(self.headers.get("Content-Length"))
+        except PolicyError as exc:
+            self._send(exc.status, {"error": {"code": exc.code, "message": exc.message}})
+            return
+        secret = getattr(self.server, "gateway_client_key", "")
+        if not bearer_matches(self.headers.get("Authorization"), secret):
+            self._send(401, {"error": {"code": "gateway_auth_required", "message": "gateway credential required"}})
+            return
         raw = self.rfile.read(length) if length else b"{}"
         try:
             body = json.loads(raw.decode("utf-8"))
@@ -108,8 +139,8 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def bind_address() -> str:
-    host = os.environ.get("BIND_HOST", "127.0.0.1")
-    if not host or host.startswith("0."):
+    host = os.environ.get("BIND_HOST", "127.0.0.1").strip()
+    if not host or host.startswith("0.") or host in IPV6_WILDCARD or host.startswith("::"):
         raise SystemExit("refusing wildcard bind")
     return host
 
@@ -120,6 +151,11 @@ def main() -> None:
     server.deps = (policy, foundry, presidio, audit)  # type: ignore[attr-defined]
     key_path = os.environ.get("LITELLM_API_KEY_FILE", "")
     api_key = Path(key_path).read_text(encoding="utf-8").strip() if key_path else os.environ.get("LITELLM_API_KEY", "")
+    gateway_key_path = os.environ.get("GATEWAY_CLIENT_KEY_FILE", "")
+    if gateway_key_path:
+        server.gateway_client_key = Path(gateway_key_path).read_text(encoding="utf-8").strip()  # type: ignore[attr-defined]
+    else:
+        server.gateway_client_key = os.environ.get("GATEWAY_CLIENT_KEY", "")  # type: ignore[attr-defined]
     server.upstream = LiteLLMUpstream(os.environ["LITELLM_BASE_URL"], api_key)  # type: ignore[attr-defined]
     server.serve_forever()
 

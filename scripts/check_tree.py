@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import sys
 from pathlib import Path
 
@@ -63,6 +64,16 @@ def check() -> list[str]:
             text = (ROOT / req).read_text(encoding="utf-8")
             if "--hash=sha256:" not in text:
                 errors.append(f"{req} is not hash-pinned")
+    address = re.compile(r"[0-9a-fA-F:.]+(/\d+)?")
+    for path in (ROOT / "deploy" / "systemd").iterdir():
+        if not path.is_file():
+            continue
+        for line in path.read_text(encoding="utf-8").splitlines():
+            if not line.startswith("IPAddressAllow="):
+                continue
+            value = line.split("=", 1)[1].strip()
+            if address.fullmatch(value) is None:
+                errors.append(f"{path.name} IPAddressAllow uses a hostname")
     if "en_core_web_lg-3.8.0" not in (ROOT / "requirements" / "spacy-model.txt").read_text(encoding="utf-8"):
         errors.append("spaCy model is not pinned to en_core_web_lg 3.8.0")
     if "spacy==3.8." not in (ROOT / "requirements" / "presidio-analyzer.txt").read_text(encoding="utf-8"):

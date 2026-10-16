@@ -1,6 +1,6 @@
 [Unit]
 Description=LiteLLM proxy (loopback only)
-# listen 127.0.0.1:4000
+# listen 127.0.0.2:4000
 After=network-online.target postgresql.service presidio-analyzer.service presidio-anonymizer.service
 Wants=network-online.target postgresql.service presidio-analyzer.service presidio-anonymizer.service
 
@@ -13,6 +13,7 @@ EnvironmentFile=/etc/litellm/config.env
 Environment=PYTHONDONTWRITEBYTECODE=1
 Environment=HOME=/var/lib/local-ai-stack/litellm
 Environment=LITELLM_LOG=ERROR
+Environment=BIND_HOST=127.0.0.2
 LoadCredential=litellm_master_key:/etc/litellm/litellm_master_key
 LoadCredential=anthropic_api_key:/etc/litellm/anthropic_api_key
 LoadCredential=azure_client_secret:/etc/litellm/azure_client_secret
@@ -34,9 +35,8 @@ RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 CapabilityBoundingSet=
 UMask=0077
 ReadWritePaths=/var/lib/local-ai-stack/litellm
-IPAddressDeny=any
-IPAddressAllow=localhost
-IPAddressAllow=api.anthropic.com
+# Off-host egress is owner-matched UFW/nftables with resolved addresses.
+# systemd IPAddressAllow does not accept hostnames, so it is not used here.
 
 [Install]
 WantedBy=local-ai-stack.target

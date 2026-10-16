@@ -1,22 +1,17 @@
-# Owner-matched OUTPUT rules. Loopback first, then per-uid ACCEPTs, then REJECT for users with no egress.
-# ACCEPT lines for resolved addresses are inserted by install.sh. This file is the committed policy.
-# litellm -> api.anthropic.com:443/tcp
+# Owner-matched OUTPUT rules. Block Open WebUI from LiteLLM, then loopback,
+# then per-uid ACCEPTs for resolved addresses, then REJECT for users with no egress.
+# install.sh inserts the resolved ACCEPT lines. Hostnames are not used here.
 # openwebui -> login.microsoftonline.com:443/tcp
 # openwebui -> login.microsoft.com:443/tcp
 # root -> archive.ubuntu.com:80/tcp
 # root -> archive.ubuntu.com:443/tcp
 # root -> security.ubuntu.com:80/tcp
 # root -> security.ubuntu.com:443/tcp
-# root -> pypi.org:443/tcp
-# root -> files.pythonhosted.org:443/tcp
 # root -> dl.cloudsmith.io:443/tcp
 # root -> pkg.cloudflare.com:443/tcp
-# root -> github.com:443/tcp
-# root -> release-assets.githubusercontent.com:443/tcp
-# root -> huggingface.co:443/tcp
-# root -> cdn-lfs.huggingface.co:443/tcp
-# root -> cas-bridge.xethub.hf.co:443/tcp
 # systemd-timesync -> time.cloudflare.com:123/udp
+-A ufw-before-output -m owner --uid-owner openwebui -d 127.0.0.2 -p tcp --dport 4000 -j REJECT
+-A ufw-before-output -m owner --uid-owner openwebui -d 127.0.0.1 -p tcp --dport 4000 -j REJECT
 -A ufw-before-output -o lo -j ACCEPT
 -A ufw-before-output -m owner --uid-owner presidio-analyzer -j REJECT
 -A ufw-before-output -m owner --uid-owner presidio-anonymizer -j REJECT
@@ -24,3 +19,4 @@
 -A ufw-before-output -m owner --uid-owner postgres -j REJECT
 -A ufw-before-output -m owner --uid-owner caddy -j REJECT
 -A ufw-before-output -m owner --uid-owner cloudflared -j REJECT
+-A ufw-before-output -m owner --uid-owner litellm -j REJECT
