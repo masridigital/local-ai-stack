@@ -52,3 +52,15 @@
     src: "{{ repo_root }}/deploy/journald/local-ai.conf"
     dest: /etc/systemd/journald.conf.d/local-ai.conf
     mode: "0644"
+
+- name: timesyncd drop-in directory
+  ansible.builtin.file:
+    path: /etc/systemd/timesyncd.conf.d
+    state: directory
+    mode: "0755"
+
+- name: timesyncd pool
+  ansible.builtin.copy:
+    src: "{{ repo_root }}/deploy/timesyncd/local-ai.conf"
+    dest: /etc/systemd/timesyncd.conf.d/local-ai.conf
+    mode: "0644"

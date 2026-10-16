@@ -5,6 +5,7 @@ from __future__ import annotations
 import http.client
 import json
 import sqlite3
+import subprocess
 import threading
 from datetime import datetime, timezone
 from http.server import ThreadingHTTPServer
@@ -30,7 +31,80 @@ def test_caddy_security_headers_and_caddy_fingerprint():
     apt = (ROOT / "deploy" / "apt-repos.sh").read_text(encoding="utf-8")
     assert "65760C51EDEA2017CEA2CA15155B6D79CA56EA34" in apt
     assert "caddy apt key fingerprint mismatch" in apt
+    assert "caddy-key.sh" in apt
     assert "pkg.cloudflare.com" not in apt
+
+
+def test_caddy_key_requires_exactly_one_primary():
+    script = ROOT / "deploy" / "caddy-key.sh"
+    primary = "65760C51EDEA2017CEA2CA15155B6D79CA56EA34"
+    subkey = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+
+    def run(dump: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            ["bash", str(script)],
+            input=dump,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+
+    good = "\n".join(
+        [
+            "pub:-:4096:1:ABCDEF:1:::-:::scESC::::::23::0:",
+            f"fpr:::::::::{primary}:",
+            "uid:-::::1::ABCDEF::Caddy:",
+            "sub:-:4096:1:SUBKEY:1::::::s::::::23:",
+            f"fpr:::::::::{subkey}:",
+            "",
+        ]
+    )
+    accepted = run(good)
+    assert accepted.returncode == 0, accepted.stderr
+    assert accepted.stdout.strip() == primary
+
+    two_primaries = "\n".join(
+        [
+            "pub:-:4096:1:ONE:1:::::::",
+            f"fpr:::::::::{primary}:",
+            "pub:-:4096:1:TWO:1:::::::",
+            f"fpr:::::::::{subkey}:",
+            "",
+        ]
+    )
+    rejected = run(two_primaries)
+    assert rejected.returncode != 0
+    assert "exactly one primary key" in rejected.stderr
+
+    fingerprint_after_uid = "\n".join(
+        [
+            "pub:-:4096:1:ONE:1:::::::",
+            "uid:-::::1::ABCDEF::Caddy:",
+            f"fpr:::::::::{primary}:",
+            "",
+        ]
+    )
+    delayed = run(fingerprint_after_uid)
+    assert delayed.returncode != 0
+    assert "exactly one primary key" in delayed.stderr
+
+
+def test_litellm_entra_token_host_is_not_shared_with_openwebui():
+    from scripts.egress_owners import load_destinations
+
+    raw = load_destinations(ROOT / "deploy" / "egress-destinations.yaml")
+    by_name = {item["name"]: item for item in raw["destinations"]}
+    litellm = by_name["entra-litellm"]
+    assert litellm["users"] == ["litellm"]
+    assert litellm["hosts"] == ["login.microsoftonline.com"]
+    assert "litellm" not in by_name["entra"]["users"]
+    assert "login.microsoft.com" not in litellm["hosts"]
+    owner = (ROOT / "deploy" / "ufw" / "owner.rules").read_text(encoding="utf-8")
+    assert "# litellm -> login.microsoftonline.com:443/tcp" in owner
+    assert "--uid-owner litellm -j REJECT" not in owner
+    timesync = (ROOT / "deploy" / "timesyncd" / "local-ai.conf").read_text(encoding="utf-8")
+    assert "NTP=ntp.ubuntu.com" in timesync
+    assert "time.cloudflare.com" not in (ROOT / "deploy" / "egress-destinations.yaml").read_text(encoding="utf-8")
 
 
 def test_store_purge_drops_old_audit_and_spend_rows():

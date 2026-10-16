@@ -172,6 +172,20 @@ def test_analyzer_hides_exception_text(capsys):
     _assert_hidden(entities, output, "RuntimeError")
 
 
+def test_analyzer_catch_all_hides_unhandled_exception(capsys):
+    app = _load("presidio/server/analyzer/app.py", "analyzer_catch_all_under_test").create_app()
+
+    @app.route("/unhandled")
+    def unhandled():
+        raise RuntimeError(MARKER)
+
+    response = app.test_client().get("/unhandled")
+    captured = capsys.readouterr()
+    assert response.status_code == 500
+    assert MARKER not in captured.err
+    _assert_hidden(response, captured.out, "RuntimeError")
+
+
 def test_anonymizer_hides_exception_text(capsys):
     app = _load("presidio/server/anonymizer/app.py", "anonymizer_app_under_test").create_app()
     client = app.test_client()

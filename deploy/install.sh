@@ -264,6 +264,8 @@ install -m 0644 "$ROOT/deploy/Caddyfile" /etc/caddy/Caddyfile
 install -m 0644 "$ROOT/deploy/ssh/99-local-ai.conf" /etc/ssh/sshd_config.d/99-local-ai.conf
 install -d -m 0755 /etc/systemd/journald.conf.d
 install -m 0644 "$ROOT/deploy/journald/local-ai.conf" /etc/systemd/journald.conf.d/local-ai.conf
+install -d -m 0755 /etc/systemd/timesyncd.conf.d
+install -m 0644 "$ROOT/deploy/timesyncd/local-ai.conf" /etc/systemd/timesyncd.conf.d/local-ai.conf
 install -d -m 0755 /usr/share/local-ai-stack
 install -m 0644 "$ROOT/deploy/wireguard/wg0.conf.example" /usr/share/local-ai-stack/wg0.conf.example
 
@@ -352,10 +354,8 @@ if [[ -f /etc/wireguard/wg0.conf ]]; then
 else
   systemctl disable wg-quick@wg0.service || true
 fi
-install -d -m 0755 /etc/systemd/timesyncd.conf.d
-install -m 0644 "$ROOT/deploy/systemd/timesyncd.conf.d/local-ai.conf" /etc/systemd/timesyncd.conf.d/local-ai.conf
 systemctl enable systemd-timesyncd
-systemctl try-restart systemd-timesyncd || true
+systemctl restart systemd-timesyncd || true
 systemctl restart systemd-journald || true
 systemctl enable auditd || true
 rm -f /etc/systemd/system/network-pre.target.wants/local-ai-egress-nft.service

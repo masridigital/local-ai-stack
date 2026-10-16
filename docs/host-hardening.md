@@ -22,7 +22,7 @@ Security updates install daily. Automatic reboot is 03:30. Python lock bumps are
 - `qemu-guest-agent` is installed with `guest-exec` and `guest-file` RPCs blocked. Proxmox backups can still freeze the filesystem.
 - `auditd`, AppArmor, and a small sysctl drop-in are installed by the script.
 - Package set is the list in `deploy/services.yaml` (Python, Postgres, Caddy, WireGuard, UFW, unattended-upgrades, restic, openssl). No container engine and no cloudflared.
-- `systemd-timesyncd` for time sync. NTP target in the egress list and in `deploy/systemd/timesyncd.conf.d/local-ai.conf`: `ntp.ubuntu.com`, uid `systemd-timesync`. Not a Cloudflare host.
+- `systemd-timesyncd` for time sync. NTP target in the egress list and in `deploy/timesyncd/local-ai.conf` (installed over the copy in `deploy/systemd/timesyncd.conf.d/local-ai.conf`): `ntp.ubuntu.com`, uid `systemd-timesync`. Not a Cloudflare host.
 - WireGuard is installed and left stopped until `/etc/wireguard/wg0.conf` exists (mode 0600, not in git). The example in `deploy/wireguard/` has no private key.
 - Journald `SystemMaxFileSize=10M` and `SystemMaxFiles=5`. LiteLLM is `LITELLM_LOG=ERROR`. Open WebUI `GLOBAL_LOG_LEVEL=WARNING` and audit level is `METADATA` so chat bodies are not written to stdout.
 - Unattended-upgrades come from `host/apt/52local-ai-unattended`: security origins only, reboot at 03:30.
@@ -39,4 +39,4 @@ restic or borg, encrypted, 3-2-1, one copy immutable/offsite. Keys held separate
 
 ## Egress list
 
-See `deploy/egress-destinations.yaml`. Default is deny. Steady-state hosts are Entra login (user `openwebui`), Ubuntu archives and `dl.cloudsmith.io` through the apt proxy (users `root` and `_apt`), and the NTP pool. `api.anthropic.com` is present for `litellm` only when `ANTHROPIC_BAA_ENABLED=true`. PyPI, GitHub, and Hugging Face are present only while `INSTALL_EGRESS=1`, which the final firewall apply clears. The Azure OpenAI host is added only when `AZURE_API_HOST` is set to that resource’s `*.openai.azure.com` name, and only for `litellm`. StackJack and Composio hosts are optional and unset; the policy gateway reaches them only through `127.0.0.1:8891`. There is no cloudflared package, unit, or apt host.
+See `deploy/egress-destinations.yaml`. Default is deny. Steady-state hosts are Entra login (user `openwebui`), Ubuntu archives and `dl.cloudsmith.io` through the apt proxy (users `root` and `_apt`), and NTP (`ntp.ubuntu.com`). `api.anthropic.com` is present for `litellm` only when `ANTHROPIC_BAA_ENABLED=true`. PyPI, GitHub, and Hugging Face are present only while `INSTALL_EGRESS=1`, which the final firewall apply clears. The Azure OpenAI host is added only when `AZURE_API_HOST` is set to that resource’s `*.openai.azure.com` name, and only for `litellm`. StackJack and Composio hosts are optional and unset; the policy gateway reaches them only through `127.0.0.1:8891`. There is no cloudflared package, unit, or apt host.

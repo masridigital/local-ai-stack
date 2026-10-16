@@ -152,6 +152,10 @@ class Server:
         def http_exception(e):
             return jsonify(_failure(self.logger, e)), e.code
 
+        @self.app.errorhandler(Exception)
+        def server_error(e):
+            return jsonify(_failure(self.logger, e)), 500
+
 
 def _exclude_attributes_from_dto(recognizer_result_list):
     excluded_attributes = [

@@ -22,7 +22,8 @@ if [[ -f /etc/apt/apt.conf.d/99local-ai-proxy ]]; then
 fi
 
 curl "${curl_proxy[@]}" -fsSL https://dl.cloudsmith.io/public/caddy/stable/gpg.key -o "$armored"
-actual="$(gpg --show-keys --with-colons "$armored" | awk -F: '$1 == "fpr" { print $10; exit }')"
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+actual="$(gpg --show-keys --with-colons "$armored" | bash "$script_dir/caddy-key.sh")"
 if [[ "$actual" != "$caddy_fingerprint" ]]; then
   echo "caddy apt key fingerprint mismatch" >&2
   exit 1
