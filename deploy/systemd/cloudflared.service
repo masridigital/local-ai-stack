@@ -1,0 +1,12 @@
+[Unit]
+Description=cloudflared for non-PHI paths only (disabled by default)
+After=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/cloudflared --config /etc/local-ai-stack/cloudflared/config.yml --no-autoupdate tunnel run
+Restart=on-failure
+RestartSec=15
+
+[Install]
+WantedBy=multi-user.target

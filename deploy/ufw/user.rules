@@ -1,0 +1,18 @@
+# Generated from deploy/egress-destinations.yaml. Default deny in and out.
+# Optional hosts (Azure resource, DNS, SIEM, MCP) are added by install.sh only when set.
+# cloudflared destinations stay absent while cloudflared_enabled is false.
+default deny incoming
+default deny outgoing
+allow out to api.anthropic.com port 443 proto tcp
+allow out to login.microsoftonline.com port 443 proto tcp
+allow out to login.microsoft.com port 443 proto tcp
+allow out to archive.ubuntu.com port 80 proto tcp
+allow out to archive.ubuntu.com port 443 proto tcp
+allow out to security.ubuntu.com port 80 proto tcp
+allow out to security.ubuntu.com port 443 proto tcp
+allow out to mcr.microsoft.com port 443 proto tcp
+allow out to ghcr.io port 443 proto tcp
+allow out to registry-1.docker.io port 443 proto tcp
+allow out to auth.docker.io port 443 proto tcp
+allow out to production.cloudflare.docker.com port 443 proto tcp
+allow out to time.cloudflare.com port 123 proto udp

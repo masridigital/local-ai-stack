@@ -1,0 +1,76 @@
+default: deny
+cloudflared_enabled: false
+destinations:
+  - name: anthropic-api
+    hosts: [api.anthropic.com]
+    port: 443
+    proto: tcp
+    purpose: Anthropic Claude API under Cap's BAA, including ZDR
+  - name: entra
+    hosts:
+      - login.microsoftonline.com
+      - login.microsoft.com
+    port: 443
+    proto: tcp
+    purpose: Entra ID OIDC for Open WebUI
+  - name: ubuntu-updates
+    hosts:
+      - archive.ubuntu.com
+      - security.ubuntu.com
+    ports: [80, 443]
+    proto: tcp
+    purpose: unattended-upgrades
+  - name: registries
+    hosts:
+      - mcr.microsoft.com
+      - ghcr.io
+      - registry-1.docker.io
+      - auth.docker.io
+      - production.cloudflare.docker.com
+    port: 443
+    proto: tcp
+    purpose: pulls of pinned images
+  - name: ntp
+    hosts: [time.cloudflare.com]
+    port: 123
+    proto: udp
+    purpose: time sync via systemd-timesyncd
+  - name: azure-openai
+    env: AZURE_API_HOST
+    host_suffix: .openai.azure.com
+    port: 443
+    proto: tcp
+    optional: true
+    purpose: Azure OpenAI resource hostname, US regions only (eastus2 or westus3 and the other US regions in policy.yaml)
+  - name: dns
+    env: DNS_SERVERS
+    port: 53
+    proto: udp
+    optional: true
+    purpose: configured resolvers only
+  - name: siem
+    env: SIEM_HOST
+    port_env: SIEM_PORT
+    proto: tcp
+    optional: true
+    purpose: audit shipping
+  - name: stackjack
+    env: STACKJACK_MCP_HOST
+    port: 443
+    proto: tcp
+    optional: true
+    purpose: MCP upstream, disabled until an explicit host is set
+  - name: composio
+    env: COMPOSIO_MCP_HOST
+    port: 443
+    proto: tcp
+    optional: true
+    purpose: MCP upstream, disabled until an explicit host is set
+  - name: cloudflared
+    hosts:
+      - region1.v2.argotunnel.com
+      - region2.v2.argotunnel.com
+    port: 7844
+    proto: tcp
+    enabled: false
+    purpose: tunnel connector for a future non-PHI path; never Open WebUI or LiteLLM

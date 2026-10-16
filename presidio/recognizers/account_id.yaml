@@ -1,0 +1,8 @@
+entity: ACCOUNT_ID
+patterns:
+  - name: canonical
+    regex: '\bACCT-SYN-\d{8}\b'
+    score: 0.95
+  - name: labeled
+    regex: '\bACCT[-_ ][A-Z0-9]{6,18}\b'
+    score: 0.7

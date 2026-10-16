@@ -1,0 +1,7 @@
+# Tunnel sink for a future non-PHI path. Disabled by default.
+# Do not add an ingress hostname. This stack is VPN/LAN only.
+# Cap declined a Cloudflare BAA. No UI or proxy route belongs here.
+tunnel: 00000000-0000-0000-0000-000000000000
+credentials-file: /etc/cloudflared/credentials.json
+ingress:
+  - service: http_status:404

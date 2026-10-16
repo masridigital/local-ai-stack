@@ -1,0 +1,12 @@
+.env
+secrets/*
+!secrets/.gitkeep
+*.pem
+*.key
+webui.db
+__pycache__/
+.pytest_cache/
+.mypy_cache/
+.venv/
+sbom.cdx.json
+.bandit

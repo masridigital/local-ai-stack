@@ -1,0 +1,14 @@
+{
+	admin off
+	servers {
+		protocols h1 h2
+	}
+}
+
+https://webui.lan.internal {
+	tls /certs/webui.crt /certs/webui.key {
+		protocols tls1.2 tls1.3
+	}
+	encode gzip
+	reverse_proxy open-webui:8080
+}

@@ -1,0 +1,8 @@
+entity: DOB
+patterns:
+  - name: iso_date
+    regex: '\b(?:19|20)\d{2}-\d{2}-\d{2}\b'
+    score: 0.7
+  - name: us_date
+    regex: '\b\d{2}/\d{2}/(?:19|20)\d{2}\b'
+    score: 0.7

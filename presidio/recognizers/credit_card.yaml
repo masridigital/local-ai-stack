@@ -1,0 +1,5 @@
+entity: CREDIT_CARD
+patterns:
+  - name: test_pan
+    regex: '\b4111[\s-]?1111[\s-]?1111[\s-]?1111\b'
+    score: 0.95

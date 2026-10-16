@@ -1,0 +1,84 @@
+# Runtime allowlist. Defaults fail closed.
+# Anthropic calls stay blocked until ANTHROPIC_BAA_ENABLED=true after the deploy checklist.
+# azure_ai/ stays off. Abuse-monitoring opt-out stays off unless Cap already approved it.
+mask_score_threshold: 0.4
+streaming_enabled: false
+anthropic_baa_enabled: false
+anthropic_zdr_confirmed_by_cap: true
+anthropic_allowed_models:
+  - anthropic/claude-sonnet-4-5
+  - anthropic/claude-haiku-4-5
+  - anthropic/claude-opus-4-5
+anthropic_allowed_params:
+  - model
+  - messages
+  - max_tokens
+  - temperature
+  - top_p
+  - stop
+  - user
+blocked_header_names:
+  - anthropic-beta
+blocked_header_prefixes:
+  - anthropic-beta
+blocked_tool_types:
+  - web_search
+  - web_fetch
+  - code_execution
+  - computer
+  - computer_20241022
+  - computer_20250124
+  - bash
+  - text_editor
+  - str_replace_editor
+  - files
+enabled_routes:
+  - /v1/chat/completions
+  - /chat/completions
+  - /health
+  - /health/liveliness
+  - /health/readiness
+  - /v1/models
+foundry:
+  azure_ai_enabled: false
+  allowed_model_families:
+    - gpt-4.1
+    - gpt-4.1-mini
+    - gpt-4.1-nano
+    - gpt-4o
+    - gpt-4o-mini
+  allowed_regions:
+    - eastus
+    - eastus2
+    - westus
+    - westus2
+    - westus3
+    - centralus
+    - northcentralus
+    - southcentralus
+    - westcentralus
+  abuse_monitoring_opt_out: false
+mcp:
+  # Empty until a StackJack or Composio tool id is added. No wildcards.
+  allowed_upstreams: []
+  allowed_kinds:
+    - stackjack
+    - composio
+recall_floors:
+  PERSON: 1.0
+  DOB: 1.0
+  US_SSN: 1.0
+  MRN: 1.0
+  RECORD_ID: 1.0
+  ACCOUNT_ID: 1.0
+  NPI: 1.0
+  PHONE_NUMBER: 0.95
+  EMAIL_ADDRESS: 1.0
+  LOCATION: 0.9
+  CREDIT_CARD: 1.0
+chat_retention_days: 30
+audit_review:
+  fail_closed_within: 1 business day
+  sample_cadence: weekly
+  access_review: quarterly
+  reviewer: designated security reviewer

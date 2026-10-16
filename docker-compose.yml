@@ -1,0 +1,203 @@
+# Phase 1 stack. Open WebUI and LiteLLM are VPN/LAN only.
+# No service is published on a wildcard host address. Cloudflare is not attached to these networks.
+# Image tags and digests match images.lock.yaml (linux/amd64).
+
+services:
+  caddy:
+    image: docker.io/library/caddy:2.11.7@sha256:173b26306d711395accaeba8b67afcaad2a085ccb1e6bf26010bfe8c095a5229
+    networks: [edge]
+    ports:
+      - "${LAN_BIND_IP:-127.0.0.1}:443:443"
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - ${CERT_DIR:-/var/lib/local-ai-stack/certs}:/certs:ro
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /data
+      - /config
+    logging: &json_logs
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+  open-webui:
+    image: ghcr.io/open-webui/open-webui:v0.12.2@sha256:ea2398210f28ef4f55d9c11426359950a7bf6681d5a8c160d476225bbd991fad
+    networks: [edge]
+    entrypoint: ["/bin/bash", "/local-ai/openwebui-entrypoint.sh"]
+    environment:
+      ENV: prod
+      WEBUI_URL: ${WEBUI_URL:-https://webui.lan.internal}
+      ENABLE_PERSISTENT_CONFIG: "false"
+      ENABLE_SIGNUP: "false"
+      ENABLE_LOGIN_FORM: "false"
+      ENABLE_OAUTH_SIGNUP: "true"
+      MICROSOFT_CLIENT_ID: ${MICROSOFT_CLIENT_ID:-00000000-0000-0000-0000-000000000000}
+      MICROSOFT_CLIENT_TENANT_ID: ${AZURE_TENANT_ID:-00000000-0000-0000-0000-000000000000}
+      MICROSOFT_OAUTH_SCOPE: openid email profile
+      OPENID_PROVIDER_URL: ${OPENID_PROVIDER_URL:-https://login.microsoftonline.com/00000000-0000-0000-0000-000000000000/v2.0/.well-known/openid-configuration}
+      OAUTH_REFRESH_TOKEN_INCLUDE_SCOPE: "true"
+      JWT_EXPIRES_IN: 8h
+      WEBUI_SESSION_COOKIE_SECURE: "true"
+      WEBUI_AUTH: "true"
+      ENABLE_OLLAMA_API: "false"
+      ENABLE_OPENAI_API: "true"
+      ENABLE_OPENAI_API_PASSTHROUGH: "false"
+      OPENAI_API_BASE_URL: http://policy-gateway:8088/v1
+      ENABLE_DIRECT_CONNECTIONS: "false"
+      ENABLE_COMMUNITY_SHARING: "false"
+      ENABLE_IMAGE_GENERATION: "false"
+      ENABLE_CODE_INTERPRETER: "false"
+      ENABLE_ADMIN_EXPORT: "false"
+      ENABLE_ADMIN_CHAT_ACCESS: "false"
+      ENABLE_WEB_SEARCH: "false"
+      ENABLE_RAG_WEB_SEARCH: "false"
+      ENABLE_RAG_LOCAL_WEB_FETCH: "false"
+      RAG_EMBEDDING_ENGINE: ""
+      RAG_EMBEDDING_MODEL: sentence-transformers/all-MiniLM-L6-v2
+      USER_PERMISSIONS_CHAT_FILE_UPLOAD: "false"
+      USER_PERMISSIONS_CHAT_WEB_UPLOAD: "false"
+      USER_PERMISSIONS_WORKSPACE_KNOWLEDGE_ACCESS: "false"
+      USER_PERMISSIONS_WORKSPACE_TOOLS_ACCESS: "false"
+      ENABLE_KNOWLEDGE_FILE_RETENTION: "false"
+      GLOBAL_LOG_LEVEL: INFO
+      LOGURU_DIAGNOSE: "false"
+      AUDIT_LOG_LEVEL: METADATA
+      ENABLE_AUDIT_STDOUT: "false"
+      ENABLE_FORWARD_USER_INFO_HEADERS: "true"
+      SCARF_NO_ANALYTICS: "true"
+      DO_NOT_TRACK: "1"
+      ANONYMIZED_TELEMETRY: "false"
+      CHAT_RETENTION_DAYS: ${CHAT_RETENTION_DAYS:-30}
+    volumes:
+      - ${WEBUI_DATA_DIR:-/var/lib/local-ai-stack/webui}:/app/backend/data
+      - ./deploy/openwebui-entrypoint.sh:/local-ai/openwebui-entrypoint.sh:ro
+    secrets:
+      - webui_secret_key
+      - microsoft_client_secret
+      - litellm_virtual_key
+    depends_on: [policy-gateway]
+    restart: unless-stopped
+    logging: *json_logs
+
+  policy-gateway:
+    image: local-ai-stack/policy-gateway:1.0.0
+    build:
+      context: .
+      dockerfile: policy-gateway/Dockerfile
+    networks: [edge, guard, models]
+    environment:
+      ANTHROPIC_BAA_ENABLED: ${ANTHROPIC_BAA_ENABLED:-false}
+      ALLOW_AZURE_AI_THIRD_PARTY: ${ALLOW_AZURE_AI_THIRD_PARTY:-false}
+      FOUNDRY_ABUSE_MONITORING_OPT_OUT: ${FOUNDRY_ABUSE_MONITORING_OPT_OUT:-false}
+      AZURE_OPENAI_DEPLOYMENT: ${AZURE_OPENAI_DEPLOYMENT:-}
+      AZURE_OPENAI_MODEL_FAMILY: ${AZURE_OPENAI_MODEL_FAMILY:-gpt-4.1}
+      AZURE_OPENAI_REGION: ${AZURE_OPENAI_REGION:-eastus2}
+      AZURE_API_BASE: ${AZURE_API_BASE:-https://example.openai.azure.com}
+      AZURE_API_VERSION: ${AZURE_API_VERSION:-2024-10-21}
+      AZURE_TENANT_ID: ${AZURE_TENANT_ID:-00000000-0000-0000-0000-000000000000}
+      AZURE_CLIENT_ID: ${AZURE_CLIENT_ID:-00000000-0000-0000-0000-000000000000}
+      CONFIG_ACTOR: ${CONFIG_ACTOR:-system:deploy}
+      PRESIDIO_ANALYZER_API_BASE: http://presidio-analyzer:3000
+      PRESIDIO_ANONYMIZER_API_BASE: http://presidio-anonymizer:3000
+      LITELLM_BASE_URL: http://litellm:4000
+      LITELLM_API_KEY_FILE: /run/secrets/litellm_virtual_key
+      AUDIT_DATABASE_URL_FILE: /run/secrets/audit_database_url
+      POLICY_PATH: /app/litellm/policy.yaml
+      RECOGNIZER_DIR: /app/presidio/recognizers
+      STACK_ROOT: /app
+      PRESIDIO_TIMEOUT: "5"
+    secrets:
+      - litellm_virtual_key
+      - audit_database_url
+    read_only: true
+    tmpfs:
+      - /tmp
+    user: "65532:65532"
+    depends_on: [presidio-analyzer, presidio-anonymizer, litellm, postgres]
+    restart: unless-stopped
+    logging: *json_logs
+
+  litellm:
+    image: ghcr.io/berriai/litellm:v1.105.1@sha256:b4239fbb9be0d915c312632ccdcccea441db9994a341536fdbf32cae82e15f9c
+    networks: [models, guard, egress]
+    entrypoint: ["/bin/bash", "/local-ai/litellm-entrypoint.sh"]
+    environment:
+      LITELLM_LOG: ERROR
+      PRESIDIO_ANALYZER_API_BASE: http://presidio-analyzer:3000
+      PRESIDIO_ANONYMIZER_API_BASE: http://presidio-anonymizer:3000
+      AZURE_OPENAI_DEPLOYMENT: ${AZURE_OPENAI_DEPLOYMENT:-}
+      AZURE_API_BASE: ${AZURE_API_BASE:-https://example.openai.azure.com}
+      AZURE_API_VERSION: ${AZURE_API_VERSION:-2024-10-21}
+      AZURE_TENANT_ID: ${AZURE_TENANT_ID:-00000000-0000-0000-0000-000000000000}
+      AZURE_CLIENT_ID: ${AZURE_CLIENT_ID:-00000000-0000-0000-0000-000000000000}
+    volumes:
+      - ./litellm/config.yaml:/app/config.yaml:ro
+      - ./presidio/recognizers.json:/app/presidio/recognizers.json:ro
+      - ./deploy/litellm-entrypoint.sh:/local-ai/litellm-entrypoint.sh:ro
+    secrets:
+      - litellm_master_key
+      - anthropic_api_key
+      - azure_client_secret
+      - database_url
+    depends_on: [postgres, presidio-analyzer, presidio-anonymizer]
+    restart: unless-stopped
+    logging: *json_logs
+
+  presidio-analyzer:
+    image: mcr.microsoft.com/presidio-analyzer:2.2.362@sha256:d459416c39345b60b72050a98aeef6be4f6b3d9da20e5ba9561e8b920f9abedb
+    networks: [guard]
+    restart: unless-stopped
+    logging: *json_logs
+
+  presidio-anonymizer:
+    image: mcr.microsoft.com/presidio-anonymizer:2.2.362@sha256:652493f687c1b7e58655e1dee7ee355494ef2fba5d17c2506bf28db77cb10b67
+    networks: [guard]
+    restart: unless-stopped
+    logging: *json_logs
+
+  postgres:
+    image: docker.io/library/postgres:16.15-bookworm@sha256:ec9f656f17c8b4dfebf49e58cf5c46d493d4846d4ea6d8b85d0637f68ee33bfc
+    networks: [guard]
+    environment:
+      POSTGRES_USER: localai
+      POSTGRES_DB: litellm
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+    secrets:
+      - postgres_password
+    volumes:
+      - ${POSTGRES_DATA_DIR:-/var/lib/local-ai-stack/postgres}:/var/lib/postgresql/data
+      - ./postgres/init:/docker-entrypoint-initdb.d:ro
+    restart: unless-stopped
+    logging: *json_logs
+
+networks:
+  edge:
+    internal: true
+  guard:
+    internal: true
+  models:
+    internal: true
+  egress: {}
+
+secrets:
+  postgres_password:
+    file: ${SECRET_DIR:-/etc/local-ai-stack/secrets}/postgres_password
+  database_url:
+    file: ${SECRET_DIR:-/etc/local-ai-stack/secrets}/database_url
+  audit_database_url:
+    file: ${SECRET_DIR:-/etc/local-ai-stack/secrets}/audit_database_url
+  litellm_master_key:
+    file: ${SECRET_DIR:-/etc/local-ai-stack/secrets}/litellm_master_key
+  litellm_virtual_key:
+    file: ${SECRET_DIR:-/etc/local-ai-stack/secrets}/litellm_virtual_key
+  anthropic_api_key:
+    file: ${SECRET_DIR:-/etc/local-ai-stack/secrets}/anthropic_api_key
+  azure_client_secret:
+    file: ${SECRET_DIR:-/etc/local-ai-stack/secrets}/azure_client_secret
+  webui_secret_key:
+    file: ${SECRET_DIR:-/etc/local-ai-stack/secrets}/webui_secret_key
+  microsoft_client_secret:
+    file: ${SECRET_DIR:-/etc/local-ai-stack/secrets}/microsoft_client_secret

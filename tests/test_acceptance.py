@@ -1,0 +1,505 @@
+"""Acceptance tests 1–11. Synthetic fixtures only."""
+
+from __future__ import annotations
+
+import base64
+import json
+import stat
+from dataclasses import replace
+from pathlib import Path
+
+import pytest
+import yaml
+
+from stack.audit import AuditLog
+from stack.egress import host_allowed, load_destinations
+from stack.errors import PolicyError
+from stack.masking import load_recognizers, mask_text, presidio_ad_hoc, residual_entities
+from stack.phi_scan import contains_raw_phi
+from stack.pipeline import McpUpstream, Upstream, handle_chat, handle_mcp, record_config_change
+from stack.policy import FoundryRuntime, load_policy
+from stack.presidio_client import PresidioClient
+from stack.retention import purge
+from tests.support.fake_presidio import FakePresidio
+
+ROOT = Path(__file__).resolve().parents[1]
+FIXTURES = json.loads((ROOT / "tests" / "fixtures" / "synthetic.json").read_text(encoding="utf-8"))
+HEADER = "SYNTHETIC — FAKE DATA — NOT REAL PERSONS"
+USER = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+RAW_PROMPT = FIXTURES["prompt"]
+RAW_RESPONSE = "The fictional patient Testy McFakerson has MRN MRN-SYN-0001234 and SSN 000-00-0000."
+
+
+@pytest.fixture(scope="module")
+def recognizers():
+    return load_recognizers(ROOT / "presidio" / "recognizers")
+
+
+@pytest.fixture(scope="module")
+def policy():
+    return load_policy(ROOT / "litellm" / "policy.yaml")
+
+
+@pytest.fixture
+def presidio_services(recognizers, policy):
+    analyzer = FakePresidio(recognizers, policy.mask_score_threshold)
+    anonymizer = FakePresidio(recognizers, policy.mask_score_threshold)
+    client = PresidioClient(
+        analyzer.url,
+        anonymizer.url,
+        timeout=0.3,
+        recognizers=recognizers,
+        threshold=policy.mask_score_threshold,
+    )
+    yield client, analyzer, anonymizer
+    analyzer.stop()
+    anonymizer.stop()
+
+
+@pytest.fixture
+def audit(tmp_path, recognizers, policy):
+    return AuditLog(tmp_path / "audit.db", recognizers, policy.mask_score_threshold)
+
+
+def _foundry() -> FoundryRuntime:
+    return FoundryRuntime(
+        deployment="dep-placeholder",
+        model_family="gpt-4.1",
+        region="eastus2",
+        api_base="https://cap-eastus2.openai.azure.com/",
+    )
+
+
+def _policy_for(policy, backend: str):
+    if backend == "anthropic":
+        return replace(policy, anthropic_baa_enabled=True)
+    if backend == "azure":
+        return policy
+    if backend == "azure_ai":
+        return replace(policy, foundry=replace(policy.foundry, azure_ai_enabled=True))
+    raise AssertionError(backend)
+
+
+def _model(backend: str) -> str:
+    if backend == "anthropic":
+        return "anthropic/claude-sonnet-4-5"
+    if backend == "azure":
+        return "azure/dep-placeholder"
+    return "azure_ai/marketplace-fixture"
+
+
+def _chat(backend, policy, presidio, audit, **overrides):
+    upstream = Upstream()
+    body = {
+        "model": _model(backend),
+        "messages": [{"role": "user", "content": RAW_PROMPT}],
+        "max_tokens": 32,
+    }
+    body.update(overrides.pop("body", {}))
+    headers = overrides.pop("headers", {})
+    try:
+        result = handle_chat(
+            path=overrides.pop("path", "/v1/chat/completions"),
+            headers=headers,
+            body=body,
+            user_id=overrides.pop("user_id", USER),
+            policy=_policy_for(policy, backend),
+            foundry=_foundry(),
+            presidio=presidio,
+            upstream=upstream,
+            audit=audit,
+            mock_response=overrides.pop("mock_response", None),
+        )
+    except PolicyError as exc:
+        return exc, upstream
+    return result, upstream
+
+
+@pytest.mark.parametrize("backend", ["anthropic", "azure", "azure_ai"])
+def test_01_pre_call_redaction(backend, policy, presidio_services, audit, recognizers):
+    client, _, _ = presidio_services
+    result, upstream = _chat(backend, policy, client, audit)
+    assert getattr(result, "status", None) == 200
+    assert len(upstream.calls) == 1
+    sent = upstream.calls[0]["messages"][0]["content"]
+    assert not residual_entities(sent, recognizers, policy.mask_score_threshold)
+    assert "<MRN>" in sent
+    assert "<PERSON>" in sent
+    assert "MRN-SYN-0001234" not in sent
+    assert "Testy McFakerson" not in sent
+
+
+@pytest.mark.parametrize("backend", ["anthropic", "azure", "azure_ai"])
+def test_02_post_call_redaction(backend, policy, presidio_services, audit, recognizers):
+    client, _, _ = presidio_services
+    result, upstream = _chat(backend, policy, client, audit, mock_response=RAW_RESPONSE)
+    assert result.status == 200
+    content = result.body["choices"][0]["message"]["content"]
+    assert "Testy McFakerson" not in content
+    assert "MRN-SYN-0001234" not in content
+    assert "<PERSON>" in content and "<MRN>" in content
+    assert not residual_entities(content, recognizers, policy.mask_score_threshold)
+
+
+def test_03_recognizers_and_recall(policy, recognizers):
+    hits: dict[str, list[bool]] = {}
+    for row in FIXTURES["canonical"]:
+        masked, _entities = mask_text(row["text"], recognizers, policy.mask_score_threshold)
+        detected = f"<{row['entity']}>" in masked and row["text"] != masked
+        hits.setdefault(row["entity"], []).append(detected)
+        assert not residual_entities(masked, recognizers, policy.mask_score_threshold)
+    for entity, floor in policy.recall_floors.items():
+        values = hits[entity]
+        recall = sum(values) / len(values)
+        assert recall >= floor, entity
+    for text in FIXTURES["negative"]:
+        masked, entities = mask_text(text, recognizers, policy.mask_score_threshold)
+        assert masked == text, text
+        assert entities == []
+
+
+def test_03_adversarial_regression(policy, recognizers):
+    for row in FIXTURES["adversarial"]:
+        if row.get("encoding") == "base64":
+            text = base64.b64encode(row["plain"].encode()).decode()
+        else:
+            text = row["text"]
+        masked, _entities = mask_text(text, recognizers, policy.mask_score_threshold)
+        assert f"<{row['entity']}>" in masked or "<OBFUSCATED_PHI>" in masked
+        assert not residual_entities(masked, recognizers, policy.mask_score_threshold)
+
+
+@pytest.mark.parametrize("backend", ["anthropic", "azure", "azure_ai"])
+@pytest.mark.parametrize(
+    "failure",
+    ["analyzer_down", "anonymizer_down", "timeout", "http_500", "bad_json", "object_json"],
+)
+def test_04_fail_closed(backend, failure, policy, presidio_services, audit):
+    client, analyzer, anonymizer = presidio_services
+    if failure == "analyzer_down":
+        client.analyzer_url = "http://127.0.0.1:9"
+    elif failure == "anonymizer_down":
+        client.anonymizer_url = "http://127.0.0.1:9"
+    elif failure == "timeout":
+        analyzer.set_mode("timeout")
+    else:
+        analyzer.set_mode(failure)
+    result, upstream = _chat(backend, policy, client, audit)
+    assert isinstance(result, PolicyError)
+    assert result.status == 503
+    assert RAW_PROMPT not in result.message
+    assert "MRN-SYN" not in result.message
+    assert upstream.calls == []
+
+
+@pytest.mark.parametrize("backend", ["anthropic", "azure", "azure_ai"])
+def test_04_streaming_rejected(backend, policy, presidio_services, audit):
+    client, _, _ = presidio_services
+    result, upstream = _chat(backend, policy, client, audit, body={"stream": True})
+    assert isinstance(result, PolicyError)
+    assert result.code == "streaming_disabled"
+    assert upstream.calls == []
+
+
+@pytest.mark.parametrize(
+    "path",
+    ["/v1/completions", "/v1/embeddings", "/v1/responses", "/v1/messages", "/v1/files", "/v1/batches", "/anthropic/v1/messages"],
+)
+def test_04_untested_routes_rejected(path, policy, presidio_services, audit):
+    client, _, _ = presidio_services
+    result, upstream = _chat("anthropic", policy, client, audit, path=path)
+    assert isinstance(result, PolicyError)
+    assert result.code == "route_disabled"
+    assert upstream.calls == []
+
+
+def test_05_pre_mcp_call(policy, presidio_services, audit, recognizers):
+    client, _, _ = presidio_services
+    allowed = replace(
+        policy,
+        mcp_allowed_upstreams=(
+            {"server": "stackjack-readonly", "kind": "stackjack", "tool": "list_tickets"},
+        ),
+    )
+    upstream = McpUpstream()
+    result = handle_mcp(
+        server="stackjack-readonly",
+        tool="list_tickets",
+        arguments={"query": "MRN-SYN-0001234 for Testy McFakerson", "_mock_result": RAW_RESPONSE},
+        user_id=USER,
+        policy=allowed,
+        presidio=client,
+        upstream=upstream,
+        audit=audit,
+    )
+    assert len(upstream.calls) == 1
+    sent = json.dumps(upstream.calls[0]["arguments"])
+    assert "MRN-SYN-0001234" not in sent
+    assert "<MRN>" in sent
+    rendered = json.dumps(result)
+    assert "Testy McFakerson" not in rendered
+    assert not residual_entities(rendered, recognizers, policy.mask_score_threshold)
+    blocked = McpUpstream()
+    with pytest.raises(PolicyError) as exc:
+        handle_mcp(
+            server="anywhere",
+            tool="export_all",
+            arguments={"query": "hello"},
+            user_id=USER,
+            policy=policy,
+            presidio=client,
+            upstream=blocked,
+            audit=audit,
+        )
+    assert exc.value.code == "mcp_not_allowlisted"
+    assert blocked.calls == []
+
+
+def test_06_audit_has_user_and_no_raw_phi(policy, presidio_services, audit, recognizers):
+    client, _, _ = presidio_services
+    result, _upstream = _chat("azure", policy, client, audit, mock_response=RAW_RESPONSE)
+    assert result.status == 200
+    rows = audit.rows()
+    assert rows
+    blob = json.dumps(rows)
+    assert USER in blob
+    assert not contains_raw_phi(blob, recognizers, policy.mask_score_threshold)
+    assert "MRN-SYN-0001234" not in blob
+    assert "Testy McFakerson" not in blob
+    change = record_config_change(audit, policy, USER, (ROOT / "litellm" / "policy.yaml").read_bytes())
+    assert change["event_type"] == "config_change"
+    assert change["user_id"] == USER
+    assert change["config_hash"]
+    compose = (ROOT / "docker-compose.yml").read_text(encoding="utf-8")
+    assert "AUDIT_LOG_LEVEL: METADATA" in compose
+    assert "LITELLM_LOG: ERROR" in compose
+    assert 'max-size: "10m"' in compose
+
+
+def test_06_openwebui_db_scan_and_retention(tmp_path, recognizers, policy):
+    import sqlite3
+
+    db = tmp_path / "webui.db"
+    conn = sqlite3.connect(db)
+    conn.execute("CREATE TABLE chat (id TEXT, user_id TEXT, title TEXT, chat TEXT, updated_at TEXT)")
+    conn.execute("CREATE TABLE file (id TEXT, created_at TEXT)")
+    old = "2000-01-01T00:00:00+00:00"
+    fresh = "2099-01-01T00:00:00+00:00"
+    conn.execute("INSERT INTO chat VALUES ('1', ?, 't', ?, ?)", (USER, "MRN-SYN-0001234", old))
+    conn.execute("INSERT INTO chat VALUES ('2', ?, 't', 'no identifier here', ?)", (USER, fresh))
+    conn.execute("INSERT INTO file VALUES ('f', ?)", (old,))
+    conn.commit()
+    conn.close()
+    raw = Path(db).read_bytes().decode("utf-8", "ignore")
+    assert contains_raw_phi(raw, recognizers, policy.mask_score_threshold)
+    removed = purge(str(db), policy.chat_retention_days, now=__import__("datetime").datetime(2026, 10, 16, tzinfo=__import__("datetime").timezone.utc))
+    assert removed["chat"] == 1
+    assert removed["file"] == 1
+    conn = sqlite3.connect(db)
+    left = conn.execute("SELECT chat FROM chat").fetchall()
+    conn.close()
+    assert left == [("no identifier here",)]
+
+
+def test_07_and_09_exposure_and_tunnel():
+    from scripts.check_tree import check
+
+    assert check() == []
+    tunnel = (ROOT / "deploy" / "cloudflared" / "config.yml").read_text(encoding="utf-8")
+    assert "http_status:404" in tunnel
+    for target in ("open-webui", "litellm", "policy-gateway"):
+        assert target not in tunnel
+    egress = load_destinations(ROOT / "deploy" / "egress-destinations.yaml")
+    assert host_allowed("api.anthropic.com", egress, {})
+    assert host_allowed("login.microsoftonline.com", egress, {})
+    assert not host_allowed("region1.v2.argotunnel.com", egress, {})
+    assert not host_allowed("cloudflare.com", egress, {})
+    azure_env = {"AZURE_API_HOST": "cap-eastus2.openai.azure.com"}
+    assert host_allowed("cap-eastus2.openai.azure.com", egress, azure_env)
+    assert not host_allowed("other.openai.azure.com", egress, azure_env)
+
+
+def test_08_secrets_are_files_not_env():
+    compose = yaml.safe_load((ROOT / "docker-compose.yml").read_text(encoding="utf-8"))
+    assert "env_file" not in (ROOT / "docker-compose.yml").read_text(encoding="utf-8")
+    for name, service in compose["services"].items():
+        for key, value in (service.get("environment") or {}).items():
+            rendered = str(value)
+            assert "sk-" not in rendered
+            assert "BEGIN PRIVATE" not in rendered
+            assert "api_key" not in key.lower() or key.endswith("_FILE") or "BASE" in key
+    secret_names = set(compose["secrets"])
+    assert "litellm_master_key" in secret_names
+    assert "cloudflared_credentials" not in secret_names
+    cloud = yaml.safe_load((ROOT / "deploy" / "cloudflared" / "docker-compose.yml").read_text(encoding="utf-8"))
+    assert "cloudflared_credentials" in cloud["secrets"]
+    example = (ROOT / ".env.example").read_text(encoding="utf-8")
+    assert "example-not-a-secret" in example
+    assert "sk-ant-" not in example
+
+
+def test_10_and_11_allowlist(policy, presidio_services, audit):
+    client, _, _ = presidio_services
+    for model in ("gpt-4o", "bedrock/claude", "vertex_ai/claude", "anthropic/claude-unknown"):
+        result, upstream = _chat("anthropic", policy, client, audit, body={"model": model})
+        assert isinstance(result, PolicyError)
+        assert result.code in {"model_not_allowlisted", "anthropic_baa_disabled"}
+        assert upstream.calls == []
+    result, upstream = _chat(
+        "anthropic",
+        policy,
+        client,
+        audit,
+        headers={"anthropic-beta": "computer-use-2025-01-24"},
+    )
+    assert isinstance(result, PolicyError)
+    assert result.code == "beta_header_blocked"
+    assert upstream.calls == []
+    result, upstream = _chat(
+        "anthropic",
+        policy,
+        client,
+        audit,
+        body={"tools": [{"type": "web_search"}]},
+    )
+    assert result.code == "tool_blocked"
+    assert upstream.calls == []
+    upstream = Upstream()
+    with pytest.raises(PolicyError) as exc:
+        handle_chat(
+            path="/v1/chat/completions",
+            headers={},
+            body={"model": "anthropic/claude-sonnet-4-5", "messages": [{"role": "user", "content": "hello"}]},
+            user_id=USER,
+            policy=policy,
+            foundry=_foundry(),
+            presidio=client,
+            upstream=upstream,
+            audit=audit,
+        )
+    assert exc.value.code == "anthropic_baa_disabled"
+    assert upstream.calls == []
+    config = (ROOT / "litellm" / "config.yaml").read_text(encoding="utf-8")
+    assert "telemetry: false" in config
+    assert "callbacks: []" in config
+    assert "success_callback: []" in config
+    assert "store_prompts_in_spend_logs: false" in config
+    assert "turn_off_message_logging: true" in config
+    for banned in ("langfuse", "helicone", "lunary"):
+        assert banned not in config.lower()
+    assert policy.anthropic_baa_enabled is False
+    assert policy.streaming_enabled is False
+    assert policy.foundry.azure_ai_enabled is False
+    assert policy.foundry.abuse_monitoring_opt_out is False
+    assert policy.anthropic_zdr_confirmed_by_cap is True
+
+
+def test_foundry_region_and_family(policy, presidio_services, audit):
+    client, _, _ = presidio_services
+    bad_region = FoundryRuntime("dep-placeholder", "gpt-4.1", "westeurope", "https://cap.openai.azure.com/")
+    upstream = Upstream()
+    with pytest.raises(PolicyError) as exc:
+        handle_chat(
+            path="/v1/chat/completions",
+            headers={},
+            body={"model": "azure/dep-placeholder", "messages": [{"role": "user", "content": "hello"}]},
+            user_id=USER,
+            policy=policy,
+            foundry=bad_region,
+            presidio=client,
+            upstream=upstream,
+            audit=audit,
+        )
+    assert exc.value.code == "region_not_allowed"
+    assert upstream.calls == []
+    marketplace = Upstream()
+    with pytest.raises(PolicyError) as exc:
+        handle_chat(
+            path="/v1/chat/completions",
+            headers={},
+            body={"model": "azure_ai/some-partner", "messages": [{"role": "user", "content": "hello"}]},
+            user_id=USER,
+            policy=policy,
+            foundry=_foundry(),
+            presidio=client,
+            upstream=marketplace,
+            audit=audit,
+        )
+    assert exc.value.code == "azure_ai_disabled"
+    assert marketplace.calls == []
+
+
+def test_egress_default_deny():
+    raw = load_destinations(ROOT / "deploy" / "egress-destinations.yaml")
+    assert raw["default"] == "deny"
+    assert raw["cloudflared_enabled"] is False
+    rules = (ROOT / "deploy" / "ufw" / "user.rules").read_text(encoding="utf-8")
+    assert "default deny outgoing" in rules
+    hosts = []
+    for line in rules.splitlines():
+        if line.startswith("allow out to "):
+            hosts.append(line.split()[3])
+    listed = set()
+    for item in raw["destinations"]:
+        if item.get("enabled", True) is False:
+            continue
+        listed.update(item.get("hosts") or [])
+    assert set(hosts) <= listed
+    assert "region1.v2.argotunnel.com" not in hosts
+    assert "api.anthropic.com" in hosts
+
+
+def test_fixture_header_and_docs():
+    text = (ROOT / "tests" / "fixtures" / "synthetic.json").read_text(encoding="utf-8")
+    assert HEADER in text
+    assert '"seed": 4242' in text
+    plan = (ROOT / "PLAN.md").read_text(encoding="utf-8")
+    security = (ROOT / "SECURITY.md").read_text(encoding="utf-8")
+    for needle in (
+        "VPN/LAN only",
+        "ANTHROPIC_BAA_ENABLED",
+        "zero data retention",
+        "azure_ai/",
+        "eastus2",
+        "mcr.microsoft.com",
+        "30 days",
+    ):
+        assert needle in plan
+    for needle in ("72-hour", "30-day", "recall", "ZDR", "seatbelt"):
+        assert needle in security or needle.lower() in security.lower() or needle in (ROOT / "docs" / "incident-response.md").read_text(encoding="utf-8")
+    incident = (ROOT / "docs" / "incident-response.md").read_text(encoding="utf-8")
+    assert "164.402" in incident
+    assert "72-hour" in incident
+    assert "30-day" in incident
+    checklist = (ROOT / "docs" / "deploy-checklist.md").read_text(encoding="utf-8")
+    assert "ZDR" in checklist
+    assert "abuse-monitoring" in checklist.lower()
+
+
+def test_recognizers_json_matches_yaml(recognizers):
+    document = json.loads((ROOT / "presidio" / "recognizers.json").read_text(encoding="utf-8"))
+    assert document == presidio_ad_hoc(recognizers)
+
+
+def test_break_glass_refuses_argv(tmp_path):
+    import os
+    import subprocess
+
+    script = ROOT / "deploy" / "break-glass-enable.sh"
+    mode = script.stat().st_mode
+    assert mode & stat.S_IXUSR
+    denied = subprocess.run([str(script), "secret"], check=False, capture_output=True, text=True)
+    assert denied.returncode == 2
+    missing = subprocess.run([str(script)], check=False, capture_output=True, text=True, env={**os.environ, "BREAK_GLASS_SECRET_FILE": ""})
+    assert missing.returncode == 2
+
+
+def test_install_check_twice():
+    import subprocess
+
+    script = ROOT / "deploy" / "install.sh"
+    first = subprocess.run([str(script), "--check"], check=False, capture_output=True, text=True)
+    second = subprocess.run([str(script), "--check"], check=False, capture_output=True, text=True)
+    assert first.returncode == 0, first.stderr
+    assert second.returncode == 0, second.stderr
+    assert first.stdout == second.stdout

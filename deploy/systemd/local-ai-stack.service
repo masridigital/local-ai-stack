@@ -1,0 +1,19 @@
+[Unit]
+Description=local-ai-stack (VPN/LAN only; not behind Cloudflare)
+After=docker.service network-online.target
+Requires=docker.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=/opt/local-ai-stack
+EnvironmentFile=-/etc/local-ai-stack/config.env
+ExecStart=/usr/bin/docker compose up -d --remove-orphans
+ExecStop=/usr/bin/docker compose down
+TimeoutStartSec=300
+Restart=on-failure
+RestartSec=15
+
+[Install]
+WantedBy=multi-user.target

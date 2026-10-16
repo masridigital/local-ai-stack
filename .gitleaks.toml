@@ -1,0 +1,4 @@
+title = "local-ai-stack"
+[allowlist]
+paths = ['''\.env\.example''', '''config\.env\.example''']
+regexes = ['''example-not-a-secret''']

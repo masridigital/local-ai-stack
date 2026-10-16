@@ -1,0 +1,10 @@
+[Unit]
+Description=Daily Open WebUI retention purge
+
+[Timer]
+OnCalendar=daily
+Persistent=true
+Unit=local-ai-retention.service
+
+[Install]
+WantedBy=timers.target

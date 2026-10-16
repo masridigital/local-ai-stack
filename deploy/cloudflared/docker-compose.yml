@@ -1,0 +1,21 @@
+services:
+  cloudflared:
+    image: docker.io/cloudflare/cloudflared:2026.10.1@sha256:3c0502d2da137286136b44f5b1d0d0be7030cc4833db9f53cff86beadad6cefa
+    # Separate project and network. No attachment to the PHI stack.
+    network_mode: bridge
+    command: ["tunnel", "--config", "/etc/cloudflared/config.yml", "--no-autoupdate", "run"]
+    volumes:
+      - ./config.yml:/etc/cloudflared/config.yml:ro
+    secrets:
+      - cloudflared_credentials
+    restart: "no"
+    profiles: ["tunnel"]
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+secrets:
+  cloudflared_credentials:
+    file: ${SECRET_DIR:-/etc/local-ai-stack/secrets}/cloudflared_credentials.json

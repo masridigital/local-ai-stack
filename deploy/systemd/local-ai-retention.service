@@ -1,0 +1,9 @@
+[Unit]
+Description=Purge Open WebUI chat history and uploads past retention
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /opt/local-ai-stack/stack/retention.py --db /var/lib/local-ai-stack/webui/webui.db --days 30
+
+[Install]
+WantedBy=multi-user.target

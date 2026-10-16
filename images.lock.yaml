@@ -1,0 +1,17 @@
+# linux/amd64 digests resolved 2026-10-16. Tags are pinned with those digests.
+images:
+  litellm: ghcr.io/berriai/litellm:v1.105.1@sha256:b4239fbb9be0d915c312632ccdcccea441db9994a341536fdbf32cae82e15f9c
+  open_webui: ghcr.io/open-webui/open-webui:v0.12.2@sha256:ea2398210f28ef4f55d9c11426359950a7bf6681d5a8c160d476225bbd991fad
+  presidio_analyzer: mcr.microsoft.com/presidio-analyzer:2.2.362@sha256:d459416c39345b60b72050a98aeef6be4f6b3d9da20e5ba9561e8b920f9abedb
+  presidio_anonymizer: mcr.microsoft.com/presidio-anonymizer:2.2.362@sha256:652493f687c1b7e58655e1dee7ee355494ef2fba5d17c2506bf28db77cb10b67
+  postgres: docker.io/library/postgres:16.15-bookworm@sha256:ec9f656f17c8b4dfebf49e58cf5c46d493d4846d4ea6d8b85d0637f68ee33bfc
+  caddy: docker.io/library/caddy:2.11.7@sha256:173b26306d711395accaeba8b67afcaad2a085ccb1e6bf26010bfe8c095a5229
+  policy_gateway_base: docker.io/library/python:3.12-slim-bookworm@sha256:2ed6491b93cd49272ee6de2b5a38440c3448360322c089fc23e370722d74179d
+  cloudflared: docker.io/cloudflare/cloudflared:2026.10.1@sha256:3c0502d2da137286136b44f5b1d0d0be7030cc4833db9f53cff86beadad6cefa
+notes:
+  presidio: >
+    Official Microsoft Container Registry images at the newest tag MCR still
+    publishes (2.2.362). Newer tags exist only on ghcr.io/data-privacy-stack
+    and are not used. Digests are the linux/amd64 manifests.
+  litellm: LiteLLM proxy v1.105.1. Streaming stays disabled in front of this image.
+  policy_gateway: Built FROM policy_gateway_base. The app image has no registry digest until build.

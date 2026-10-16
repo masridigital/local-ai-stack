@@ -1,0 +1,8 @@
+entity: RECORD_ID
+patterns:
+  - name: canonical
+    regex: '\bREC-SYN-\d{6}\b'
+    score: 0.95
+  - name: labeled
+    regex: '\bRECORD[-_ ][A-Z0-9]{5,16}\b'
+    score: 0.7
