@@ -135,7 +135,10 @@ def test_units_have_no_hostname_allows():
                 value = line.split("=", 1)[1].strip()
                 assert value[:1].isdigit() or value.startswith(":"), path.name
     litellm = (ROOT / "deploy" / "systemd" / "litellm.service").read_text(encoding="utf-8")
-    assert "IPAddressAllow=" not in litellm
+    assert "IPAddressDeny=any" in litellm
+    assert "IPAddressAllow=127.0.0.1" in litellm
+    assert "IPAddressAllow=127.0.0.2" in litellm
+    assert "http://127.0.0.1:8889" in litellm
     assert "api.anthropic.com" not in litellm
     gateway = (ROOT / "deploy" / "systemd" / "policy-gateway.service").read_text(encoding="utf-8")
     assert "IPAddressAllow=127.0.0.2" in gateway

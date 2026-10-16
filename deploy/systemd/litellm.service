@@ -39,7 +39,12 @@ RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 CapabilityBoundingSet=
 UMask=0077
 ReadWritePaths=/var/lib/local-ai-stack/litellm
-# Off-host HTTPS goes through the local egress proxy. nftables allows only that user out.
+# Loopback only. 127.0.0.1 is Postgres, Presidio, and the egress proxy on :8889.
+# 127.0.0.2 is this unit's own bind. systemd cannot allow a port, so off-host
+# sockets are denied and HTTP leaves through the proxy.
+IPAddressDeny=any
+IPAddressAllow=127.0.0.1
+IPAddressAllow=127.0.0.2
 
 [Install]
 WantedBy=local-ai-stack.target
