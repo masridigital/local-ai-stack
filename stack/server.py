@@ -120,7 +120,8 @@ class Handler(BaseHTTPRequestHandler):
             self._send(400, {"error": {"code": "invalid_json", "message": "request body must be json"}})
             return
         policy, foundry, presidio, audit = self.server.deps  # type: ignore[attr-defined]
-        user_id = self.headers.get("X-OpenWebUI-User-Id")
+        user_id = (self.headers.get("X-OpenWebUI-User-Id") or "").strip() or None
+        user_email = (self.headers.get("X-OpenWebUI-User-Email") or "").strip() or None
         headers = strip_forwarded_identity({key: value for key, value in self.headers.items()})
         try:
             result = handle_chat(
@@ -128,6 +129,7 @@ class Handler(BaseHTTPRequestHandler):
                 headers=headers,
                 body=body,
                 user_id=user_id,
+                user_email=user_email,
                 policy=policy,
                 foundry=foundry,
                 presidio=presidio,
@@ -136,6 +138,20 @@ class Handler(BaseHTTPRequestHandler):
             )
         except PolicyError as exc:
             self._send(exc.status, {"error": {"code": exc.code, "message": exc.message}})
+            return
+        except Exception:
+            try:
+                audit.write(
+                    event_type="request",
+                    decision="block",
+                    user_id=user_id,
+                    user_email=user_email,
+                    route=self.path.split("?", 1)[0],
+                    reason="unhandled",
+                )
+            except Exception:
+                pass
+            self._send(500, {"error": {"code": "unhandled", "message": "request failed"}})
             return
         self._send(result.status, result.body)
 

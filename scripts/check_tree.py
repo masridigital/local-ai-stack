@@ -15,7 +15,6 @@ if str(ROOT) not in sys.path:
 from scripts.egress_owners import load_destinations, render_nd_rules, render_owner_rules, render_user_rules
 
 WILDCARD_HOST = ".".join(("0", "0", "0", "0"))
-FORBIDDEN_TUNNEL_TARGETS = ("open-webui", "litellm", "policy-gateway", "presidio", "postgres")
 HARDENING = ("ProtectSystem=strict", "NoNewPrivileges=yes", "PrivateTmp=yes", "CapabilityBoundingSet=")
 
 
@@ -33,12 +32,28 @@ def check() -> list[str]:
     for relative in ("docker-compose.yml", "images.lock.yaml", "policy-gateway/Dockerfile", "deploy/cloudflared/docker-compose.yml"):
         if (ROOT / relative).exists():
             errors.append(f"docker artifact still present: {relative}")
+    for relative in (
+        "deploy/cloudflared/config.yml",
+        "deploy/systemd/cloudflared.service",
+        "ansible/roles/cloudflared/tasks/main.yml",
+    ):
+        if (ROOT / relative).exists():
+            errors.append(f"cloudflared artifact still present: {relative}")
     services = yaml.safe_load((ROOT / "deploy" / "services.yaml").read_text(encoding="utf-8"))
     if services.get("docker") is not False or services.get("runtime") != "native":
         errors.append("services.yaml is not a native runtime")
     install = (ROOT / "deploy" / "install.sh").read_text(encoding="utf-8")
     if "docker compose" in install or "docker.io" in install:
         errors.append("install.sh still installs or starts Docker")
+    if re.search(r"apt-get install[^\n]*\bcloudflared\b", install):
+        errors.append("install.sh still installs cloudflared")
+    if "cloudflared" in services.get("apt_packages", []):
+        errors.append("services.yaml still installs cloudflared")
+    apt_repos = (ROOT / "deploy" / "apt-repos.sh").read_text(encoding="utf-8")
+    if "pkg.cloudflare.com" in apt_repos:
+        errors.append("apt-repos.sh still adds a Cloudflare repository")
+    if "65760C51EDEA2017CEA2CA15155B6D79CA56EA34" not in apt_repos:
+        errors.append("apt-repos.sh does not pin the Caddy key fingerprint")
     for app in services["apps"]:
         unit_path = ROOT / "deploy" / "systemd" / app["unit"]
         unit = unit_path.read_text(encoding="utf-8")
@@ -113,16 +128,13 @@ def check() -> list[str]:
         errors.append("ufw owner6.rules drifted from the IPv6 ND renderer")
     if "default deny incoming" not in user_rules or "default deny outgoing" not in user_rules:
         errors.append("ufw rules are not default deny")
-    if WILDCARD_HOST in user_rules or "argotunnel" in user_rules or "docker.io" in user_rules:
+    if WILDCARD_HOST in user_rules or "argotunnel" in user_rules or "docker.io" in user_rules or "pkg.cloudflare.com" in user_rules:
         errors.append("ufw rules allow the world, cloudflared, or a container registry")
     if "--uid-owner policy-gateway -j REJECT" not in owner_rules:
         errors.append("policy-gateway is missing a default egress reject")
-    tunnel = (ROOT / "deploy" / "cloudflared" / "config.yml").read_text(encoding="utf-8").lower()
-    for target in FORBIDDEN_TUNNEL_TARGETS:
-        if target in tunnel:
-            errors.append(f"cloudflared config mentions {target}")
-    if "http_status:404" not in tunnel:
-        errors.append("cloudflared config must sink to http_status:404")
+    egress_text = (ROOT / "deploy" / "egress-destinations.yaml").read_text(encoding="utf-8")
+    if "cloudflared" in egress_text or "pkg.cloudflare.com" in egress_text or "argotunnel" in egress_text:
+        errors.append("egress list still names cloudflared")
     caddy = (ROOT / "deploy" / "Caddyfile").read_text(encoding="utf-8")
     if "127.0.0.1" not in caddy or "bind" not in caddy:
         errors.append("Caddyfile does not bind loopback by default")
@@ -149,7 +161,6 @@ def check() -> list[str]:
         "open_webui",
         "caddy",
         "wireguard",
-        "cloudflared",
         "firewall",
         "retention",
     ):

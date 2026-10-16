@@ -18,6 +18,8 @@
 -A ufw-before-output -d 127.0.0.1 -p tcp --dport 8890 -m owner --uid-owner _apt -j ACCEPT
 -A ufw-before-output -d 127.0.0.1 -p tcp --dport 8890 -j REJECT
 -A ufw-before-output -d 127.0.0.1 -p tcp --dport 8891 -m owner ! --uid-owner policy-gateway -j REJECT
+-A ufw-before-output -m owner ! --uid-owner openwebui -d 127.0.0.1 -p tcp --dport 8088 -j REJECT
+-A ufw-before-output -m owner ! --uid-owner openwebui -d 127.0.0.2 -p tcp --dport 8088 -j REJECT
 -A ufw-before-output -o lo -j ACCEPT
 -A ufw-before-output -m owner --uid-owner egress-proxy -p tcp --dport 80 -j ACCEPT
 -A ufw-before-output -m owner --uid-owner egress-proxy -p tcp --dport 443 -j ACCEPT
@@ -32,6 +34,5 @@
 -A ufw-before-output -m owner --uid-owner policy-gateway -j REJECT
 -A ufw-before-output -m owner --uid-owner postgres -j REJECT
 -A ufw-before-output -m owner --uid-owner caddy -j REJECT
--A ufw-before-output -m owner --uid-owner cloudflared -j REJECT
 -A ufw-before-output -m owner --uid-owner litellm -j REJECT
 -A ufw-before-output -m owner --uid-owner openwebui -j REJECT

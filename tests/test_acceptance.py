@@ -104,6 +104,7 @@ def _chat(backend, policy, presidio, audit, **overrides):
             headers=headers,
             body=body,
             user_id=overrides.pop("user_id", USER),
+            user_email=overrides.pop("user_email", None),
             policy=_policy_for(policy, backend),
             foundry=_foundry(),
             presidio=presidio,
@@ -140,6 +141,51 @@ def test_02_post_call_redaction(backend, policy, presidio_services, audit, recog
     assert "MRN-SYN-0001234" not in content
     assert "<PERSON>" in content and "<MRN>" in content
     assert not residual_entities(content, recognizers, policy.mask_score_threshold)
+    assert "usage" not in result.body
+
+
+def test_post_call_masks_every_choice(policy, presidio_services, audit, recognizers):
+    client, _, _ = presidio_services
+
+    class TwoChoices(Upstream):
+        def complete(self, payload, team_id=None):
+            raw = super().complete(payload, team_id=team_id)
+            raw["choices"][0]["message"]["tool_calls"] = [{"function": {"arguments": RAW_RESPONSE}}]
+            raw["choices"].append(
+                {
+                    "index": 1,
+                    "message": {"role": "assistant", "content": RAW_RESPONSE, "refusal": RAW_RESPONSE},
+                    "finish_reason": "stop",
+                }
+            )
+            raw["provider_specific_fields"] = {"echo": RAW_RESPONSE}
+            return raw
+
+    result = handle_chat(
+        path="/v1/chat/completions",
+        headers={"X-Entra-App-Roles": "phi"},
+        body={"model": "azure/dep-placeholder", "messages": [{"role": "user", "content": "hello"}]},
+        user_id=USER,
+        policy=policy,
+        foundry=_foundry(),
+        presidio=client,
+        upstream=TwoChoices(),
+        audit=audit,
+        mock_response=RAW_RESPONSE,
+    )
+    assert result.status == 200
+    encoded = json.dumps(result.body)
+    assert "MRN-SYN-0001234" not in encoded
+    assert "Testy McFakerson" not in encoded
+    assert "tool_calls" not in encoded
+    assert "refusal" not in encoded
+    assert "provider_specific_fields" not in encoded
+    assert len(result.body["choices"]) == 2
+    for choice in result.body["choices"]:
+        content = choice["message"]["content"]
+        assert "<PERSON>" in content and "<MRN>" in content
+        assert set(choice) == {"index", "message", "finish_reason"}
+        assert set(choice["message"]) == {"role", "content"}
 
 
 def test_03_recognizers_and_recall(policy, recognizers):
@@ -362,10 +408,8 @@ def test_07_and_09_exposure_and_tunnel():
     from scripts.check_tree import check
 
     assert check() == []
-    tunnel = (ROOT / "deploy" / "cloudflared" / "config.yml").read_text(encoding="utf-8")
-    assert "http_status:404" in tunnel
-    for target in ("open-webui", "litellm", "policy-gateway"):
-        assert target not in tunnel
+    assert not (ROOT / "deploy" / "cloudflared" / "config.yml").exists()
+    assert not (ROOT / "deploy" / "systemd" / "cloudflared.service").exists()
     egress = load_destinations(ROOT / "deploy" / "egress-destinations.yaml")
     assert not host_allowed("api.anthropic.com", egress, {})
     assert host_allowed("api.anthropic.com", egress, {"ANTHROPIC_BAA_ENABLED": "true"})
@@ -374,6 +418,7 @@ def test_07_and_09_exposure_and_tunnel():
     assert host_allowed("pypi.org", egress, {"INSTALL_EGRESS": "1"})
     assert host_allowed("login.microsoftonline.com", egress, {})
     assert not host_allowed("region1.v2.argotunnel.com", egress, {})
+    assert not host_allowed("pkg.cloudflare.com", egress, {})
     assert not host_allowed("cloudflare.com", egress, {})
     azure_env = {"AZURE_API_HOST": "cap-eastus2.openai.azure.com"}
     assert host_allowed("cap-eastus2.openai.azure.com", egress, azure_env)
@@ -405,8 +450,8 @@ def test_08_secrets_are_files_not_env():
     assert "example-not-a-secret" in example
     assert "sk-ant-" not in example
     assert "0600" in (ROOT / "deploy" / "write-secret.sh").read_text(encoding="utf-8")
-    cloud = (ROOT / "deploy" / "systemd" / "cloudflared.service").read_text(encoding="utf-8")
-    assert "/etc/cloudflared/credentials.json" in cloud
+    assert "cloudflared" not in (ROOT / "ansible" / "site.yml").read_text(encoding="utf-8")
+    assert "CLOUDFLARED" not in example
 
 
 def test_10_and_11_allowlist(policy, presidio_services, audit):
@@ -503,7 +548,8 @@ def test_foundry_region_and_family(policy, presidio_services, audit):
 def test_egress_default_deny():
     raw = load_destinations(ROOT / "deploy" / "egress-destinations.yaml")
     assert raw["default"] == "deny"
-    assert raw["cloudflared_enabled"] is False
+    assert "cloudflared_enabled" not in raw
+    assert all(item.get("name") != "cloudflared" for item in raw["destinations"])
     rules = (ROOT / "deploy" / "ufw" / "user.rules").read_text(encoding="utf-8")
     assert "default deny outgoing" in rules
     hosts = []
@@ -549,6 +595,25 @@ def test_egress_default_deny():
     assert "mcp.example" in opened
     assert "--uid-owner policy-gateway -d" not in opened
     assert "--uid-owner policy-gateway -p tcp --dport 443 -j ACCEPT" not in opened
+
+
+def test_audit_records_email_and_rejects_missing_user_id(policy, presidio_services, audit):
+    client, _, _ = presidio_services
+    email = "pilot@example.invalid"
+    result, _upstream = _chat("azure", policy, client, audit, user_email=email)
+    assert result.status == 200
+    row = audit.rows()[-1]
+    assert row["user_id"] == USER
+    assert row["user_email"] == email
+    assert row["decision"] == "allow"
+    assert email not in (row["prompt_redacted"] or "")
+    blocked, _upstream = _chat("azure", policy, client, audit, user_id=None, user_email=email)
+    assert isinstance(blocked, PolicyError)
+    assert blocked.code == "user_identity_required"
+    denied = audit.rows()[-1]
+    assert denied["reason"] == "user_identity_required"
+    assert denied["user_id"] is None
+    assert denied["user_email"] == email
 
 
 def test_gateway_forwards_litellm_names_and_masks_fields(policy, presidio_services, audit):

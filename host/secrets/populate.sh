@@ -150,7 +150,7 @@ fill_generated "$gateway"
 copy_secret "$gateway" "$gateway_copy"
 
 fill_external "$virtual" LITELLM_VIRTUAL_KEY "LiteLLM virtual key"
-fill_external "${SECRET_ROOT}/etc/litellm/azure_client_secret" AZURE_CLIENT_SECRET "Azure client secret"
+fill_external "${SECRET_ROOT}/etc/litellm/azure_api_key" AZURE_API_KEY "Azure API key"
 fill_external "${SECRET_ROOT}/etc/open-webui/microsoft_client_secret" MICROSOFT_CLIENT_SECRET "Entra client secret"
 
 if [[ -f "$postgres" && ! -f "$dburl" && -z "${DATABASE_URL:-}" ]]; then

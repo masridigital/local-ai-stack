@@ -1,0 +1,10 @@
+[Unit]
+Description=Daily check that retires the bootstrap admin once an Entra admin exists
+
+[Timer]
+OnCalendar=daily
+Persistent=true
+Unit=local-ai-retire-bootstrap.service
+
+[Install]
+WantedBy=timers.target

@@ -7,7 +7,23 @@
   loop:
     - local-ai-retention.service
     - local-ai-retention.timer
+    - local-ai-store-purge.service
+    - local-ai-store-purge.timer
+    - local-ai-retire-bootstrap.service
+    - local-ai-retire-bootstrap.timer
     - local-ai-stack.target
+
+- name: local-ai script directory
+  ansible.builtin.file:
+    path: /opt/local-ai-stack/scripts
+    state: directory
+    mode: "0755"
+
+- name: bootstrap retirement script
+  ansible.builtin.copy:
+    src: "{{ repo_root }}/scripts/retire_bootstrap_admin.py"
+    dest: /opt/local-ai-stack/scripts/retire_bootstrap_admin.py
+    mode: "0755"
 
 - name: enable retention timer and the stack target
   ansible.builtin.systemd:
@@ -16,4 +32,6 @@
     daemon_reload: true
   loop:
     - local-ai-retention.timer
+    - local-ai-store-purge.timer
+    - local-ai-retire-bootstrap.timer
     - local-ai-stack.target

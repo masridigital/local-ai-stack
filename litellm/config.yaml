@@ -19,9 +19,7 @@ model_list:
       model: azure/os.environ/AZURE_OPENAI_DEPLOYMENT
       api_base: os.environ/AZURE_API_BASE
       api_version: os.environ/AZURE_API_VERSION
-      tenant_id: os.environ/AZURE_TENANT_ID
-      client_id: os.environ/AZURE_CLIENT_ID
-      client_secret: os.environ/AZURE_CLIENT_SECRET
+      api_key: os.environ/AZURE_API_KEY
       # azure_ai/ is omitted on purpose. Marketplace and partner models may fall
       # outside Microsoft's BAA. Do not add them unless ALLOW_AZURE_AI_THIRD_PARTY
       # is approved. Do not set an abuse-monitoring opt-out header here.

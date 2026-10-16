@@ -76,7 +76,14 @@ apt-get install -y \
 
 bash "$ROOT/deploy/apt-repos.sh"
 apt-get update
-apt-get install -y caddy cloudflared
+apt-get install -y caddy
+if dpkg -s cloudflared >/dev/null 2>&1; then
+  apt-get remove -y cloudflared
+fi
+rm -f /etc/apt/sources.list.d/cloudflared.list /usr/share/keyrings/cloudflare-main.gpg
+systemctl disable --now cloudflared.service || true
+rm -f /etc/systemd/system/cloudflared.service
+rm -rf /etc/cloudflared
 
 create_user() {
   local name="$1"
@@ -102,8 +109,7 @@ install -d -m 0755 \
   /opt/open-webui \
   /var/lib/local-ai-stack \
   /var/lib/local-ai-stack/backups \
-  /var/lib/local-ai-stack/certs \
-  /etc/cloudflared
+  /var/lib/local-ai-stack/certs
 
 install -d -m 0700 -o presidio-analyzer -g presidio-analyzer /var/lib/local-ai-stack/presidio-analyzer
 install -d -m 0700 -o presidio-anonymizer -g presidio-anonymizer /var/lib/local-ai-stack/presidio-anonymizer
@@ -116,6 +122,7 @@ install -d -m 0700 /etc/presidio-analyzer /etc/presidio-anonymizer /etc/litellm 
 
 install -d -m 0755 /opt/local-ai-stack/scripts /opt/local-ai-stack/postgres /opt/local-ai-stack/deploy
 cp -a "$ROOT/scripts/ensure_postgres.py" /opt/local-ai-stack/scripts/ensure_postgres.py
+cp -a "$ROOT/scripts/retire_bootstrap_admin.py" /opt/local-ai-stack/scripts/retire_bootstrap_admin.py
 cp -a "$ROOT/postgres/init" /opt/local-ai-stack/postgres/init
 rm -rf /opt/policy-gateway/stack /opt/policy-gateway/litellm /opt/policy-gateway/presidio
 cp -a "$ROOT/stack" /opt/policy-gateway/stack
@@ -249,15 +256,19 @@ install -m 0644 "$ROOT/deploy/systemd/open-webui.service" /etc/systemd/system/op
 install -m 0644 "$ROOT/deploy/systemd/local-ai-stack.target" /etc/systemd/system/local-ai-stack.target
 install -m 0644 "$ROOT/deploy/systemd/local-ai-retention.service" /etc/systemd/system/local-ai-retention.service
 install -m 0644 "$ROOT/deploy/systemd/local-ai-retention.timer" /etc/systemd/system/local-ai-retention.timer
-install -m 0644 "$ROOT/deploy/systemd/cloudflared.service" /etc/systemd/system/cloudflared.service
+install -m 0644 "$ROOT/deploy/systemd/local-ai-store-purge.service" /etc/systemd/system/local-ai-store-purge.service
+install -m 0644 "$ROOT/deploy/systemd/local-ai-store-purge.timer" /etc/systemd/system/local-ai-store-purge.timer
+install -m 0644 "$ROOT/deploy/systemd/local-ai-retire-bootstrap.service" /etc/systemd/system/local-ai-retire-bootstrap.service
+install -m 0644 "$ROOT/deploy/systemd/local-ai-retire-bootstrap.timer" /etc/systemd/system/local-ai-retire-bootstrap.timer
 install -d -m 0755 /etc/systemd/system/caddy.service.d /etc/systemd/system/postgresql@.service.d
 install -m 0644 "$ROOT/deploy/systemd/caddy.service.d.conf" /etc/systemd/system/caddy.service.d/10-hardening.conf
 install -m 0644 "$ROOT/deploy/systemd/postgresql.service.d.conf" /etc/systemd/system/postgresql@.service.d/10-hardening.conf
 install -m 0644 "$ROOT/deploy/Caddyfile" /etc/caddy/Caddyfile
-install -m 0644 "$ROOT/deploy/cloudflared/config.yml" /etc/cloudflared/config.yml
 install -m 0644 "$ROOT/deploy/ssh/99-local-ai.conf" /etc/ssh/sshd_config.d/99-local-ai.conf
 install -d -m 0755 /etc/systemd/journald.conf.d
 install -m 0644 "$ROOT/deploy/journald/local-ai.conf" /etc/systemd/journald.conf.d/local-ai.conf
+install -d -m 0755 /etc/systemd/timesyncd.conf.d
+install -m 0644 "$ROOT/deploy/systemd/timesyncd.conf.d/local-ai.conf" /etc/systemd/timesyncd.conf.d/local-ai.conf
 install -d -m 0755 /usr/share/local-ai-stack
 install -m 0644 "$ROOT/deploy/wireguard/wg0.conf.example" /usr/share/local-ai-stack/wg0.conf.example
 
@@ -340,16 +351,15 @@ systemctl enable open-webui.service
 systemctl enable caddy.service
 systemctl enable local-ai-stack.target
 systemctl enable --now local-ai-retention.timer
-systemctl disable --now cloudflared.service || true
+systemctl enable --now local-ai-store-purge.timer
+systemctl enable --now local-ai-retire-bootstrap.timer
 if [[ -f /etc/wireguard/wg0.conf ]]; then
   systemctl enable wg-quick@wg0.service
 else
   systemctl disable wg-quick@wg0.service || true
 fi
-install -d -m 0755 /etc/systemd/timesyncd.conf.d
-install -m 0644 "$ROOT/deploy/systemd/timesyncd.conf.d/local-ai.conf" /etc/systemd/timesyncd.conf.d/local-ai.conf
 systemctl enable systemd-timesyncd
-systemctl try-restart systemd-timesyncd || true
+systemctl restart systemd-timesyncd || true
 systemctl restart systemd-journald || true
 systemctl enable auditd || true
 rm -f /etc/systemd/system/network-pre.target.wants/local-ai-egress-nft.service
@@ -358,6 +368,7 @@ systemctl enable --now local-ai-egress-refresh.timer
 
 systemctl restart egress-proxy.service
 systemctl start litellm.service
+# LiteLLM :4000 rejects the openwebui uid, so this probe stays root.
 litellm_up=0
 for _ in $(seq 1 60); do
   if curl -fsS --max-time 2 http://127.0.0.2:4000/health/liveliness >/dev/null; then
@@ -385,4 +396,24 @@ chmod 0644 "$baa_stamp"
 rm -f /etc/apt/sources.list.d/cloudflared.list
 install -m 0644 "$ROOT/deploy/apt/99local-ai-proxy" /etc/apt/apt.conf.d/99local-ai-proxy
 
-echo "install complete; native units are enabled and cloudflared is disabled"
+systemctl restart policy-gateway.service
+# :8088 accepts only the openwebui uid, so the probe cannot run as root.
+gateway_up=0
+for _ in $(seq 1 60); do
+  if bash "$ROOT/deploy/health-check.sh" gateway; then
+    gateway_up=1
+    break
+  fi
+  sleep 1
+done
+if [[ "$gateway_up" -ne 1 ]]; then
+  echo "policy gateway health check failed" >&2
+  exit 1
+fi
+
+python3 "$ROOT/scripts/retire_bootstrap_admin.py" \
+  --db /var/lib/local-ai-stack/webui/webui.db \
+  --password-file /etc/open-webui/webui_admin_password
+bash "$ROOT/deploy/check-password-login.sh" --live --allow-down
+
+echo "install complete; native units are enabled"

@@ -20,7 +20,6 @@ DIRECT_DENY_USERS = (
     "policy-gateway",
     "postgres",
     "caddy",
-    "cloudflared",
     "litellm",
     "openwebui",
 )
@@ -30,6 +29,12 @@ PROXY_USER = "egress-proxy"
 LITELLM_DENY = (
     "-A ufw-before-output -m owner --uid-owner openwebui -d 127.0.0.2 -p tcp --dport 4000 -j REJECT",
     "-A ufw-before-output -m owner --uid-owner openwebui -d 127.0.0.1 -p tcp --dport 4000 -j REJECT",
+)
+# Only the openwebui uid may open the policy gateway. This is spliced ahead of
+# the loopback accept, which would otherwise allow every local uid.
+GATEWAY_UID_GATE = (
+    "-A ufw-before-output -m owner ! --uid-owner openwebui -d 127.0.0.1 -p tcp --dport 8088 -j REJECT",
+    "-A ufw-before-output -m owner ! --uid-owner openwebui -d 127.0.0.2 -p tcp --dport 8088 -j REJECT",
 )
 
 
@@ -92,7 +97,7 @@ def _hosts(item: dict, env: dict[str, str]) -> list[str]:
 def render_user_rules(raw: dict, env: dict[str, str] | None = None) -> str:
     lines = [
         "# FQDN allowlist for the local egress proxy. These are not global firewall allows.",
-        "# Optional hosts are added only when their env var is set. cloudflared stays off.",
+        "# Optional hosts are added only when their env var is set. cloudflared is not installed.",
         "default deny incoming",
         "default deny outgoing",
     ]
@@ -132,6 +137,7 @@ def render_owner_rules(raw: dict, resolutions: dict[str, list[str]], env: dict[s
     lines.append(
         "-A ufw-before-output -d 127.0.0.1 -p tcp --dport 8891 -m owner ! --uid-owner policy-gateway -j REJECT"
     )
+    lines.extend(GATEWAY_UID_GATE)
     lines.append("-A ufw-before-output -o lo -j ACCEPT")
     lines.append(f"-A ufw-before-output -m owner --uid-owner {PROXY_USER} -p tcp --dport 80 -j ACCEPT")
     lines.append(f"-A ufw-before-output -m owner --uid-owner {PROXY_USER} -p tcp --dport 443 -j ACCEPT")

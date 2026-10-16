@@ -1,0 +1,18 @@
+[Unit]
+Description=Disable the bootstrap admin after an Entra admin exists
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+NoNewPrivileges=yes
+ProtectSystem=strict
+PrivateTmp=yes
+ProtectHome=yes
+CapabilityBoundingSet=
+ReadWritePaths=/var/lib/local-ai-stack/webui /etc/open-webui
+IPAddressDeny=any
+ExecStart=/usr/bin/python3 /opt/local-ai-stack/scripts/retire_bootstrap_admin.py --db /var/lib/local-ai-stack/webui/webui.db --password-file /etc/open-webui/webui_admin_password
+
+[Install]
+WantedBy=multi-user.target

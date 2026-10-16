@@ -12,6 +12,29 @@
     state: present
     update_cache: true
 
+- name: remove cloudflared from the host
+  ansible.builtin.apt:
+    name: cloudflared
+    state: absent
+
+- name: stop cloudflared when a unit is still installed
+  ansible.builtin.systemd:
+    name: cloudflared.service
+    enabled: false
+    state: stopped
+  failed_when: false
+
+- name: remove cloudflared unit, config, and apt source
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - /etc/systemd/system/cloudflared.service
+    - /etc/cloudflared/config.yml
+    - /etc/cloudflared/credentials.json
+    - /etc/apt/sources.list.d/cloudflared.list
+    - /usr/share/keyrings/cloudflare-main.gpg
+
 - name: ssh drop-in
   ansible.builtin.copy:
     src: "{{ repo_root }}/deploy/ssh/99-local-ai.conf"
@@ -28,4 +51,16 @@
   ansible.builtin.copy:
     src: "{{ repo_root }}/deploy/journald/local-ai.conf"
     dest: /etc/systemd/journald.conf.d/local-ai.conf
+    mode: "0644"
+
+- name: timesyncd drop-in directory
+  ansible.builtin.file:
+    path: /etc/systemd/timesyncd.conf.d
+    state: directory
+    mode: "0755"
+
+- name: timesyncd pool
+  ansible.builtin.copy:
+    src: "{{ repo_root }}/deploy/systemd/timesyncd.conf.d/local-ai.conf"
+    dest: /etc/systemd/timesyncd.conf.d/local-ai.conf
     mode: "0644"

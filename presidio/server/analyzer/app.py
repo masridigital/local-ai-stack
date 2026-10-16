@@ -1,12 +1,15 @@
 """REST API server for analyzer.
 
 Vendored from microsoft/presidio tag 2.2.362 (MIT).
-Local changes: bind 127.0.0.1 unless BIND_HOST is set, refuse a wildcard bind,
-and keep werkzeug access logs at ERROR.
+Local changes: bind 127.0.0.1 unless BIND_HOST is set, refuse a wildcard bind
+including IPv6 ``::``, keep werkzeug access logs at ERROR, and return a
+generic error body. The process is started by gunicorn, not Flask's
+development server.
 """
 import json
 import logging
 import os
+import uuid
 from logging.config import fileConfig
 from pathlib import Path
 from typing import Tuple
@@ -119,19 +122,10 @@ class Server:
                     content_type="application/json",
                 )
             except TypeError as te:
-                error_msg = (
-                    f"Failed to parse /analyze request "
-                    f"for AnalyzerEngine.analyze(). {te.args[0]}"
-                )
-                self.logger.error(error_msg)
-                return jsonify(error=error_msg), 400
+                return jsonify(_failure(self.logger, te)), 400
 
             except Exception as e:
-                self.logger.error(
-                    f"A fatal error occurred during execution of "
-                    f"AnalyzerEngine.analyze(). {e}"
-                )
-                return jsonify(error=e.args[0]), 500
+                return jsonify(_failure(self.logger, e)), 500
 
         @self.app.route("/recognizers", methods=["GET"])
         def recognizers() -> Tuple[str, int]:
@@ -142,11 +136,7 @@ class Server:
                 names = [o.name for o in recognizers_list]
                 return jsonify(names), 200
             except Exception as e:
-                self.logger.error(
-                    f"A fatal error occurred during execution of "
-                    f"AnalyzerEngine.get_recognizers(). {e}"
-                )
-                return jsonify(error=e.args[0]), 500
+                return jsonify(_failure(self.logger, e)), 500
 
         @self.app.route("/supportedentities", methods=["GET"])
         def supported_entities() -> Tuple[str, int]:
@@ -156,15 +146,15 @@ class Server:
                 entities_list = self.engine.get_supported_entities(language)
                 return jsonify(entities_list), 200
             except Exception as e:
-                self.logger.error(
-                    f"A fatal error occurred during execution of "
-                    f"AnalyzerEngine.supported_entities(). {e}"
-                )
-                return jsonify(error=e.args[0]), 500
+                return jsonify(_failure(self.logger, e)), 500
 
         @self.app.errorhandler(HTTPException)
         def http_exception(e):
-            return jsonify(error=e.description), e.code
+            return jsonify(_failure(self.logger, e)), e.code
+
+        @self.app.errorhandler(Exception)
+        def server_error(e):
+            return jsonify(_failure(self.logger, e)), 500
 
 
 def _exclude_attributes_from_dto(recognizer_result_list):
@@ -183,14 +173,23 @@ def create_app():  # noqa: D103
     return server.app
 
 
+def _failure(logger: logging.Logger, exc: BaseException) -> dict:
+    """Log the class name and a request id. Never log or return exc text."""
+    request_id = uuid.uuid4().hex
+    logger.error("request failed request_id=%s exception=%s", request_id, type(exc).__name__)
+    return {"error": "request failed", "request_id": request_id}
+
+
 def _bind_host() -> str:
-    host = os.environ.get("BIND_HOST", "127.0.0.1")
-    if not host or host.startswith("0."):
+    host = os.environ.get("BIND_HOST", "127.0.0.1").strip()
+    if not host or host.startswith("0.") or host.startswith("::") or host.startswith("[::"):
         raise SystemExit("refusing wildcard bind")
     return host
 
 
+def main() -> None:
+    raise SystemExit("refusing the Flask development server; use the gunicorn unit")
+
+
 if __name__ == "__main__":
-    app = create_app()
-    port = int(os.environ.get("PORT", DEFAULT_PORT))
-    app.run(host=_bind_host(), port=port)
+    main()
