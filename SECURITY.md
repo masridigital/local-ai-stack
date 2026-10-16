@@ -10,3 +10,4 @@
 - **Logging:** metadata + redacted payloads only; retention 6y (HIPAA docs) / 5y (NYDFS 500.6).
 - **Change control:** Marko security review required before any merge or deploy.
 - **Reporting:** report vulnerabilities privately to Joseph Masri; do not open public issues.
+- **Host:** Ubuntu Server LTS VM; LUKS, UFW default-deny inbound, unattended-upgrades, CIS L1-style hardening, encrypted backups (see PLAN.md).

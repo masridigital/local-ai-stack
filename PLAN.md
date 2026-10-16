@@ -58,3 +58,14 @@ No deploy, no merge without Marko review, no real credentials, no public exposur
 - Zero-data-retention: enable if part of Cap's agreement — **verify ZDR status**.
 - LiteLLM: `telemetry: False`; no third-party success/failure callbacks (Langfuse, Helicone, etc.); logs local Postgres only. Open WebUI: disable external web search, analytics, community sharing, external model connections.
 - Acceptance test 11: requests with blocked features/beta headers or non-anthropic models are rejected; config check asserts telemetry off and no external callbacks.
+
+## Target host: Ubuntu Server LTS VM (Cap on-prem hypervisor)
+Deliverables in-repo: `docker compose` stack; `deploy/systemd/*.service` (compose up/down, Restart=on-failure, ordered after docker + cloudflared); `deploy/install.sh` (idempotent: packages, docker, user/group, dirs w/ 0700, secrets from env/vault, enable units); `docs/host-hardening.md` covering:
+- **LUKS** full-disk encryption at install (or LUKS data volume for /var/lib/docker + backups), key/passphrase escrow held separately.
+- **UFW** default deny incoming; no inbound except SSH from VPN/mgmt subnet; services reachable only via cloudflared (outbound) or VPN.
+- **unattended-upgrades** for security updates + reboot window; monthly image updates.
+- **CIS-style hardening** (Ubuntu CIS L1 baseline): SSH keys only/no root, auditd, AppArmor, minimal packages, time sync, sysctl hardening, docker daemon (no TCP socket, userns-remap/rootless where feasible, live-restore, log limits).
+- **Log retention**: journald + docker logs rotated locally; audit logs shipped to SIEM, retained 6y (HIPAA) / 5y (NYDFS).
+- **Encrypted backups**: restic/borg encrypted, 3-2-1 with immutable offsite copy, quarterly restore test.
+Acceptance: install.sh shellcheck clean and idempotent in CI (Ubuntu LTS container/VM); UFW rules test asserts no listening inbound ports beyond allowed.
+
