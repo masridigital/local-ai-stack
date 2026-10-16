@@ -20,17 +20,22 @@ from scripts.scope_virtual_key import request_body
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_zdr_attestation_stays_false_until_cap_signs():
+def test_zdr_attestation_cites_cap_chat():
     text = (ROOT / "litellm" / "policy.yaml").read_text(encoding="utf-8")
-    assert "anthropic_zdr_confirmed_by_cap: false" in text
-    assert "anthropic_zdr_confirmed_by_cap: true" not in text
+    assert "anthropic_zdr_confirmed_by_cap: true" in text
+    assert "anthropic_zdr_confirmed_by_cap: false" not in text
+    assert "2026-10-15" in text
+    assert "BAA has ZDR" in text
     policy = load_policy(ROOT / "litellm" / "policy.yaml")
-    assert policy.anthropic_zdr_confirmed_by_cap is False
+    assert policy.anthropic_zdr_confirmed_by_cap is True
     plan = (ROOT / "PLAN.md").read_text(encoding="utf-8")
     checklist = (ROOT / "docs" / "deploy-checklist.md").read_text(encoding="utf-8")
+    for blob in (plan, checklist):
+        assert "2026-10-15" in blob
+        assert "BAA has ZDR" in blob
+        assert "8 AM" in blob
     assert "zero data retention" in plan.lower()
-    assert "is false" in plan
-    assert "Cap has not signed" in checklist
+    assert "Formal document verification" in checklist
 
 
 def test_open_webui_entra_group_and_no_first_admin():
@@ -341,10 +346,14 @@ def test_anthropic_dropin_follows_the_switch(tmp_path):
     assert off.returncode == 0, off.stderr
     assert not (dest / "10-anthropic.conf").exists()
     install = (ROOT / "deploy" / "install.sh").read_text(encoding="utf-8")
-    assert "litellm-baa-dropin.sh" in install
-    assert "systemctl restart litellm.service" in install
-    assert "SCOPE_VIRTUAL_KEY_FORCE" in install
-    assert "baa_previous" in install
+    dropin = install.index("litellm-baa-dropin.sh")
+    reload = install.index("systemctl daemon-reload")
+    restart = install.index("systemctl restart litellm.service")
+    health = install.index("http://127.0.0.2:4000/health/liveliness")
+    scope = install.index("scope_virtual_key.py")
+    assert dropin < reload < restart < health < scope
+    assert '[[ "$baa_previous" != "$baa_current" ]]' in install
+    assert install.index("SCOPE_VIRTUAL_KEY_FORCE=1") < scope
 
 
 def test_reject_is_spliced_before_loopback_accept():

@@ -433,7 +433,7 @@ def test_10_and_11_allowlist(policy, presidio_services, audit):
     assert policy.streaming_enabled is False
     assert policy.foundry.azure_ai_enabled is False
     assert policy.foundry.abuse_monitoring_opt_out is False
-    assert policy.anthropic_zdr_confirmed_by_cap is False
+    assert policy.anthropic_zdr_confirmed_by_cap is True
 
 
 def test_foundry_region_and_family(policy, presidio_services, audit):

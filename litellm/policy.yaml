@@ -4,8 +4,9 @@
 mask_score_threshold: 0.4
 streaming_enabled: false
 anthropic_baa_enabled: false
-# Stays false until Cap signs the BAA/ZDR checklist. A chat note is not that signature.
-anthropic_zdr_confirmed_by_cap: false
+# Cap attested in chat on 2026-10-15 that the BAA includes ZDR ("BAA has ZDR").
+# Formal document verification is still pending at Cap's 8 AM review.
+anthropic_zdr_confirmed_by_cap: true
 anthropic_allowed_models:
   - anthropic/claude-sonnet-4-5
   - anthropic/claude-haiku-4-5

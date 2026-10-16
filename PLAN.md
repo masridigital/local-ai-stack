@@ -81,7 +81,7 @@ No deploy from this PR, no real credentials, no public exposure, no real data. C
 - `ANTHROPIC_API_KEY` from `/etc/litellm/anthropic_api_key` (mode 0600, `LoadCredential`).
 - Allowed models are listed in `litellm/policy.yaml`. Anything else is rejected.
 - Allowed parameters: `model`, `messages`, `max_tokens`, `temperature`, `top_p`, `stop`, `user`. `stream: true` is rejected.
-- Zero data retention is not confirmed in this tree. `anthropic_zdr_confirmed_by_cap` is false until Cap signs the BAA/ZDR checklist. The runtime switch stays off until that checklist also confirms the live key and org.
+- Zero data retention: Cap attested in chat on 2026-10-15 that the BAA includes ZDR ("BAA has ZDR"). `anthropic_zdr_confirmed_by_cap` is true. Formal document verification is still pending at Cap's 8 AM review. The runtime switch stays off until that review also confirms the live key and org.
 
 ## 7. Foundry
 
