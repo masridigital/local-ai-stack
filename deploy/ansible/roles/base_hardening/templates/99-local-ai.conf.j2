@@ -1,0 +1,3 @@
+{% for item in base_hardening_sysctl %}
+{{ item.key }} = {{ item.value }}
+{% endfor %}

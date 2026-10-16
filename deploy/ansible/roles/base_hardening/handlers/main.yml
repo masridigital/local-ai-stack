@@ -1,0 +1,20 @@
+---
+- name: Reload sysctl settings
+  ansible.posix.sysctl:
+    name: "{{ item.key }}"
+    value: "{{ item.value }}"
+    sysctl_set: true
+    state: present
+    reload: true
+  loop: "{{ base_hardening_sysctl }}"
+
+- name: Restart journald
+  ansible.builtin.systemd:
+    name: systemd-journald.service
+    state: restarted
+
+- name: Reload ssh
+  ansible.builtin.systemd:
+    name: ssh.service
+    state: reloaded
+  when: local_ai_apply_ssh_hardening == '1'

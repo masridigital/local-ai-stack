@@ -1,0 +1,4 @@
+---
+- name: Reload backup units
+  ansible.builtin.systemd:
+    daemon_reload: true

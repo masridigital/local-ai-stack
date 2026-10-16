@@ -1,0 +1,129 @@
+---
+- name: Validate the WireGuard listen port
+  ansible.builtin.assert:
+    that:
+      - local_ai_wireguard_listen_port is match('^[0-9]+$')
+      - local_ai_wireguard_listen_port | int > 0
+      - local_ai_wireguard_listen_port | int < 65536
+    fail_msg: WIREGUARD_LISTEN_PORT must be a UDP port
+  when: local_ai_wireguard_listen_port | length > 0
+
+- name: Deny inbound traffic by default
+  community.general.ufw:
+    direction: incoming
+    default: deny
+
+- name: Deny outbound traffic by default
+  community.general.ufw:
+    direction: outgoing
+    default: deny
+
+- name: Set ufw logging
+  community.general.ufw:
+    logging: "{{ firewall_logging }}"
+
+- name: Allow loopback traffic
+  community.general.ufw:
+    rule: allow
+    direction: "{{ item }}"
+    interface: lo
+    comment: local-ai-loopback
+  loop:
+    - in
+    - out
+
+- name: Allow SSH from the VPN
+  community.general.ufw:
+    rule: allow
+    direction: in
+    src: "{{ local_ai_vpn_ssh_cidr }}"
+    port: "22"
+    proto: tcp
+    comment: local-ai-vpn-ssh
+  when: local_ai_vpn_ssh_cidr | length > 0
+
+- name: Allow HTTPS from the VPN
+  community.general.ufw:
+    rule: allow
+    direction: in
+    src: "{{ local_ai_vpn_ssh_cidr }}"
+    port: "443"
+    proto: tcp
+    comment: local-ai-vpn-https
+  when: local_ai_vpn_ssh_cidr | length > 0
+
+- name: Allow WireGuard ingress
+  community.general.ufw:
+    rule: allow
+    direction: in
+    port: "{{ local_ai_wireguard_listen_port }}"
+    proto: udp
+    comment: local-ai-wireguard
+  when: local_ai_wireguard_listen_port | length > 0
+
+- name: Install the egress renderer
+  ansible.builtin.copy:
+    src: "{{ local_ai_repo_root }}/scripts/egress_owners.py"
+    dest: /opt/local-ai-stack/scripts/egress_owners.py
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Install the egress allowlist
+  ansible.builtin.copy:
+    src: "{{ local_ai_repo_root }}/deploy/egress-destinations.yaml"
+    dest: /opt/local-ai-stack/deploy/egress-destinations.yaml
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Checksum ufw before.rules
+  ansible.builtin.stat:
+    path: /etc/ufw/before.rules
+    checksum_algorithm: sha256
+  register: firewall_before_rules
+
+- name: Apply owner-matched egress allowlist
+  ansible.builtin.command:
+    argv:
+      - python3
+      - /opt/local-ai-stack/scripts/egress_owners.py
+      - --apply-ufw
+      - --dest
+      - /opt/local-ai-stack/deploy/egress-destinations.yaml
+  environment:
+    AZURE_API_HOST: "{{ local_ai_azure_api_host }}"
+    DNS_SERVERS: "{{ lookup('ansible.builtin.env', 'DNS_SERVERS') | default('', true) }}"
+    SIEM_HOST: "{{ lookup('ansible.builtin.env', 'SIEM_HOST') | default('', true) }}"
+    SIEM_PORT: "{{ lookup('ansible.builtin.env', 'SIEM_PORT') | default('', true) }}"
+    STACKJACK_MCP_HOST: "{{ lookup('ansible.builtin.env', 'STACKJACK_MCP_HOST') | default('', true) }}"
+    COMPOSIO_MCP_HOST: "{{ lookup('ansible.builtin.env', 'COMPOSIO_MCP_HOST') | default('', true) }}"
+  changed_when: false
+
+- name: Recheck ufw before.rules
+  ansible.builtin.stat:
+    path: /etc/ufw/before.rules
+    checksum_algorithm: sha256
+  register: firewall_after_rules
+
+- name: Record the owner-matched egress generation
+  ansible.builtin.copy:
+    dest: /var/lib/local-ai-stack/backups/.egress-generation
+    content: "{{ firewall_after_rules.stat.checksum }}\n"
+    owner: root
+    group: root
+    mode: "0644"
+  when: firewall_before_rules.stat.checksum != firewall_after_rules.stat.checksum
+  notify: Reload ufw
+
+- name: Enable ufw
+  community.general.ufw:
+    state: enabled
+
+- name: Install the firewall policy note
+  ansible.builtin.template:
+    src: firewall-policy.txt.j2
+    dest: /usr/share/local-ai-stack/firewall-policy.txt
+    owner: root
+    group: root
+    mode: "0644"

@@ -1,0 +1,15 @@
+---
+# WireGuard is the PHI ingress path. The package is installed and left stopped
+# until /etc/wireguard/wg0.conf exists (mode 0600, not in git).
+# Set wireguard_manage_config and pass wireguard_private_key from Ansible Vault
+# to render that file. Do not commit a private key.
+wireguard_manage_config: false
+wireguard_private_key: ""
+wireguard_address: 10.0.0.2/24
+wireguard_config_path: /etc/wireguard/wg0.conf
+wireguard_example_path: /usr/share/local-ai-stack/wg0.conf.example
+wireguard_peers:
+  - public_key: ""
+    endpoint: vpn.example.internal:51820
+    allowed_ips: 10.0.0.0/24
+    keepalive: 25

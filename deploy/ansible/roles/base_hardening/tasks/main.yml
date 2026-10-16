@@ -1,0 +1,183 @@
+---
+- name: Load the native service manifest
+  ansible.builtin.include_vars:
+    file: "{{ local_ai_repo_root }}/deploy/services.yaml"
+
+- name: Read the mount table
+  ansible.builtin.slurp:
+    src: /proc/mounts
+  register: base_hardening_mounts
+
+- name: Require a LUKS volume for local AI data
+  ansible.builtin.assert:
+    that:
+      - base_hardening_luks_mounts | length > 0
+      - base_hardening_luks_mounts | select('search', '/dev/mapper/|crypt') | list | length > 0
+    fail_msg: >-
+      Mount a LUKS volume at /var/lib/local-ai-stack before apply.
+      Set base_hardening_enforce_luks to false only for a lab that has no ePHI.
+  vars:
+    base_hardening_luks_mounts: >-
+      {{
+        (base_hardening_mounts.content | b64decode).splitlines()
+        | select('search', ' /var/lib/local-ai-stack ')
+        | list
+      }}
+  when: base_hardening_enforce_luks | bool
+
+- name: Check for a Docker daemon config
+  ansible.builtin.stat:
+    path: /etc/docker/daemon.json
+  register: base_hardening_docker_daemon
+
+- name: Read the Docker daemon config
+  ansible.builtin.slurp:
+    src: /etc/docker/daemon.json
+  register: base_hardening_docker_daemon_json
+  when: base_hardening_docker_daemon.stat.exists
+
+- name: Refuse a Docker TCP socket
+  ansible.builtin.assert:
+    that:
+      - "'tcp://' not in (base_hardening_docker_daemon_json.content | b64decode)"
+    fail_msg: refusing to leave a Docker TCP socket configured
+  when: base_hardening_docker_daemon.stat.exists
+
+- name: Install Ubuntu packages
+  ansible.builtin.apt:
+    name: "{{ (apt_packages | reject('in', ['caddy', 'cloudflared']) | list) + base_hardening_extra_packages }}"
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: Create non-login service users
+  ansible.builtin.user:
+    name: "{{ item.user }}"
+    home: "{{ item.data_dir }}"
+    shell: /usr/sbin/nologin
+    system: true
+    create_home: false
+  loop: "{{ apps }}"
+  loop_control:
+    label: "{{ item.user }}"
+
+- name: Create application directories
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ item.owner }}"
+    group: "{{ item.group }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - { path: /opt/local-ai-stack, mode: "0755", owner: root, group: root }
+    - { path: /opt/local-ai-stack/scripts, mode: "0755", owner: root, group: root }
+    - { path: /opt/local-ai-stack/requirements, mode: "0755", owner: root, group: root }
+    - { path: /opt/local-ai-stack/postgres, mode: "0755", owner: root, group: root }
+    - { path: /opt/local-ai-stack/deploy, mode: "0755", owner: root, group: root }
+    - { path: /opt/presidio-analyzer, mode: "0755", owner: root, group: root }
+    - { path: /opt/presidio-anonymizer, mode: "0755", owner: root, group: root }
+    - { path: /opt/litellm, mode: "0755", owner: root, group: root }
+    - { path: /opt/litellm/presidio, mode: "0755", owner: root, group: root }
+    - { path: /opt/policy-gateway, mode: "0755", owner: root, group: root }
+    - { path: /opt/open-webui, mode: "0755", owner: root, group: root }
+    - { path: /usr/share/local-ai-stack, mode: "0755", owner: root, group: root }
+    - { path: /var/lib/local-ai-stack, mode: "0755", owner: root, group: root }
+    - { path: /var/lib/local-ai-stack/backups, mode: "0700", owner: root, group: root }
+    - { path: /var/lib/local-ai-stack/certs, mode: "0755", owner: root, group: root }
+    - { path: /etc/presidio-analyzer, mode: "0700", owner: root, group: root }
+    - { path: /etc/presidio-anonymizer, mode: "0700", owner: root, group: root }
+    - { path: /etc/litellm, mode: "0700", owner: root, group: root }
+    - { path: /etc/policy-gateway, mode: "0700", owner: root, group: root }
+    - { path: /etc/open-webui, mode: "0700", owner: root, group: root }
+    - { path: /etc/postgres, mode: "0700", owner: root, group: root }
+    - { path: /etc/ssh/sshd_config.d, mode: "0755", owner: root, group: root }
+    - { path: /etc/systemd/journald.conf.d, mode: "0755", owner: root, group: root }
+  loop_control:
+    label: "{{ item.path }}"
+
+- name: Create service data directories
+  ansible.builtin.file:
+    path: "{{ item.data_dir }}"
+    state: directory
+    owner: "{{ item.user }}"
+    group: "{{ item.user }}"
+    mode: "0700"
+  loop: "{{ apps }}"
+  loop_control:
+    label: "{{ item.data_dir }}"
+
+- name: Create Open WebUI cache directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: openwebui
+    group: openwebui
+    mode: "0700"
+  loop:
+    - /var/lib/local-ai-stack/webui/hf
+    - /var/lib/local-ai-stack/webui/st
+
+- name: Install sysctl drop-in
+  ansible.builtin.template:
+    src: 99-local-ai.conf.j2
+    dest: /etc/sysctl.d/99-local-ai.conf
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Reload sysctl settings
+
+- name: Apply sysctl settings
+  ansible.posix.sysctl:
+    name: "{{ item.key }}"
+    value: "{{ item.value }}"
+    sysctl_set: true
+    state: present
+    reload: true
+  loop: "{{ base_hardening_sysctl }}"
+  loop_control:
+    label: "{{ item.key }}"
+
+- name: Install the ssh drop-in
+  ansible.builtin.template:
+    src: sshd-local-ai.conf.j2
+    dest: /etc/ssh/sshd_config.d/99-local-ai.conf
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Reload ssh
+
+- name: Install journald limits
+  ansible.builtin.template:
+    src: journald-local-ai.conf.j2
+    dest: /etc/systemd/journald.conf.d/local-ai.conf
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart journald
+
+- name: Enable unattended security upgrades
+  ansible.builtin.template:
+    src: "{{ item.src }}"
+    dest: "{{ item.dest }}"
+    owner: root
+    group: root
+    mode: "0644"
+  loop:
+    - src: 20auto-upgrades.j2
+      dest: /etc/apt/apt.conf.d/20auto-upgrades
+    - src: 52local-ai-reboot.j2
+      dest: /etc/apt/apt.conf.d/52local-ai-reboot
+  loop_control:
+    label: "{{ item.dest }}"
+
+- name: Enable auditd
+  ansible.builtin.systemd:
+    name: auditd.service
+    enabled: true
+    state: started
+
+- name: Enable time sync
+  ansible.builtin.systemd:
+    name: systemd-timesyncd.service
+    enabled: true
+    state: started

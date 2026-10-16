@@ -1,0 +1,13 @@
+local-ai-stack firewall policy
+inbound: deny, except loopback
+{% if local_ai_vpn_ssh_cidr | length > 0 %}
+vpn ssh and https: {{ local_ai_vpn_ssh_cidr }}
+{% endif %}
+{% if local_ai_wireguard_listen_port | length > 0 %}
+wireguard ingress udp: {{ local_ai_wireguard_listen_port }}
+{% endif %}
+
+outbound: deny, except loopback and the owner-matched allowlist
+source: deploy/egress-destinations.yaml
+cloudflared: denied while cloudflared_enabled is false
+phi services: presidio, the policy gateway, postgres, and caddy have no off-host egress

@@ -1,0 +1,21 @@
+---
+# Disabled by default. Cap declined a Cloudflare BAA, so PHI stays on the VPN.
+# The sink has no hostname and answers http_status:404. An explicit enable still
+# cannot target Open WebUI, LiteLLM, the policy gateway, or Presidio.
+# Egress to argotunnel stays closed until deploy/egress-destinations.yaml sets
+# the cloudflared destination to enabled. This role does not open that hole.
+cloudflared_admin_nonphi_enabled: false
+cloudflared_admin_nonphi_tunnel_id: 00000000-0000-0000-0000-000000000000
+cloudflared_admin_nonphi_credentials_file: /etc/cloudflared/credentials.json
+cloudflared_admin_nonphi_ingress:
+  - service: http_status:404
+cloudflared_admin_nonphi_phi_patterns:
+  - ":3000([^0-9]|$)"
+  - ":3001([^0-9]|$)"
+  - ":4000([^0-9]|$)"
+  - ":8080([^0-9]|$)"
+  - ":8088([^0-9]|$)"
+  - "(?i)open-webui"
+  - "(?i)litellm"
+  - "(?i)policy-gateway"
+  - "(?i)presidio"

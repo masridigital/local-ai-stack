@@ -1,0 +1,12 @@
+# Admin and non-PHI only. Disabled by default. No PHI origin belongs here.
+tunnel: {{ cloudflared_admin_nonphi_tunnel_id }}
+credentials-file: {{ cloudflared_admin_nonphi_credentials_file }}
+ingress:
+{% for rule in cloudflared_admin_nonphi_ingress %}
+{% if rule.hostname is defined %}
+  - hostname: {{ rule.hostname }}
+    service: {{ rule.service }}
+{% else %}
+  - service: {{ rule.service }}
+{% endif %}
+{% endfor %}

@@ -1,0 +1,7 @@
+---
+- name: Restart cloudflared
+  ansible.builtin.systemd:
+    name: cloudflared.service
+    state: restarted
+    daemon_reload: true
+  when: cloudflared_admin_nonphi_enabled | bool

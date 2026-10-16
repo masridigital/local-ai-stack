@@ -1,0 +1,457 @@
+---
+- name: Reject a wildcard or non-IPv4 bind address
+  ansible.builtin.assert:
+    that:
+      - local_ai_vpn_bind_ip is match('^[0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+$')
+      - local_ai_vpn_bind_ip != '0.0.0.0'
+    fail_msg: VPN_BIND_IP must be a loopback or VPN address
+
+- name: Validate the Azure OpenAI host
+  ansible.builtin.assert:
+    that:
+      - local_ai_azure_api_host is match('^[A-Za-z0-9.-]+\\.openai\\.azure\\.com$')
+    fail_msg: AZURE_API_HOST must be a hostname ending in .openai.azure.com
+  when: local_ai_azure_api_host | length > 0
+
+- name: Create apt keyring directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  loop:
+    - /usr/share/keyrings
+    - /etc/apt/sources.list.d
+
+- name: Download the Caddy archive key
+  ansible.builtin.get_url:
+    url: https://dl.cloudsmith.io/public/caddy/stable/gpg.key
+    dest: /usr/share/keyrings/caddy-stable-archive-keyring.asc
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Dearmor the Caddy archive key
+  ansible.builtin.command:
+    argv:
+      - gpg
+      - --dearmor
+      - --output
+      - /usr/share/keyrings/caddy-stable-archive-keyring.gpg
+      - /usr/share/keyrings/caddy-stable-archive-keyring.asc
+    creates: /usr/share/keyrings/caddy-stable-archive-keyring.gpg
+
+- name: Install the Caddy apt source
+  ansible.builtin.get_url:
+    url: https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt
+    dest: /etc/apt/sources.list.d/caddy-stable.list
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Download the cloudflared archive key
+  ansible.builtin.get_url:
+    url: https://pkg.cloudflare.com/cloudflare-main.gpg
+    dest: /usr/share/keyrings/cloudflare-main.asc
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Dearmor the cloudflared archive key
+  ansible.builtin.command:
+    argv:
+      - gpg
+      - --dearmor
+      - --output
+      - /usr/share/keyrings/cloudflare-main.gpg
+      - /usr/share/keyrings/cloudflare-main.asc
+    creates: /usr/share/keyrings/cloudflare-main.gpg
+
+- name: Install the cloudflared apt source
+  ansible.builtin.template:
+    src: cloudflared.list.j2
+    dest: /etc/apt/sources.list.d/cloudflared.list
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Install Caddy and cloudflared
+  ansible.builtin.apt:
+    name:
+      - caddy
+      - cloudflared
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: Stop the packaged cloudflared unit
+  ansible.builtin.systemd:
+    name: cloudflared.service
+    enabled: false
+    state: stopped
+    daemon_reload: true
+
+- name: Install application trees
+  ansible.builtin.copy:
+    src: "{{ local_ai_repo_root }}/{{ item.src }}/"
+    dest: "{{ item.dest }}"
+    owner: root
+    group: root
+    mode: "0644"
+    directory_mode: "0755"
+  loop: "{{ native_stack_trees }}"
+  loop_control:
+    label: "{{ item.dest }}"
+
+- name: Install application files
+  ansible.builtin.copy:
+    src: "{{ local_ai_repo_root }}/{{ item.src }}"
+    dest: "{{ item.dest }}"
+    owner: root
+    group: root
+    mode: "{{ item.mode }}"
+  loop:
+    - src: litellm/config.yaml
+      dest: /opt/litellm/config.yaml
+      mode: "0644"
+    - src: presidio/recognizers.json
+      dest: /opt/litellm/presidio/recognizers.json
+      mode: "0644"
+    - src: deploy/litellm-run.sh
+      dest: /opt/litellm/litellm-run.sh
+      mode: "0755"
+    - src: deploy/open-webui-run.sh
+      dest: /opt/open-webui/open-webui-run.sh
+      mode: "0755"
+    - src: scripts/ensure_postgres.py
+      dest: /opt/local-ai-stack/scripts/ensure_postgres.py
+      mode: "0644"
+    - src: deploy/Caddyfile
+      dest: /etc/caddy/Caddyfile
+      mode: "0644"
+  loop_control:
+    label: "{{ item.dest }}"
+
+- name: Stage hashed requirement files
+  ansible.builtin.copy:
+    src: "{{ local_ai_repo_root }}/{{ item }}"
+    dest: "/opt/local-ai-stack/requirements/{{ item | basename }}"
+    owner: root
+    group: root
+    mode: "0644"
+  loop: "{{ native_stack_requirement_files }}"
+  loop_control:
+    label: "{{ item }}"
+
+- name: Install hashed Python dependencies
+  ansible.builtin.pip:
+    requirements: "/opt/local-ai-stack/requirements/{{ item.1 }}"
+    virtualenv: "{{ item.0.dest }}/venv"
+    virtualenv_command: python3 -m venv
+    extra_args: --require-hashes
+    state: present
+  loop: "{{ native_stack_venvs | subelements('requirements') }}"
+  loop_control:
+    label: "{{ item.0.dest }} {{ item.1 }}"
+
+- name: Check the local embedding cache
+  ansible.builtin.stat:
+    path: /var/lib/local-ai-stack/webui/hf/hub
+  register: native_stack_embedding_cache
+
+- name: Download the local embedding model once
+  ansible.builtin.command:
+    argv:
+      - /opt/open-webui/venv/bin/python
+      - -c
+      - >-
+        from sentence_transformers import SentenceTransformer;
+        SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
+  environment:
+    HF_HOME: /var/lib/local-ai-stack/webui/hf
+    SENTENCE_TRANSFORMERS_HOME: /var/lib/local-ai-stack/webui/st
+  when:
+    - local_ai_allow_embedding_download == '1'
+    - not native_stack_embedding_cache.stat.exists
+  changed_when: true
+  notify: Hand the embedding cache to openwebui
+
+- name: Install config files without overwriting operator edits
+  ansible.builtin.copy:
+    src: "{{ local_ai_repo_root }}/{{ item.src }}"
+    dest: "{{ item.dest }}"
+    owner: root
+    group: root
+    mode: "0600"
+    force: false
+  loop: "{{ native_stack_config_files }}"
+  loop_control:
+    label: "{{ item.dest }}"
+
+- name: Install root-only credentials supplied in the environment
+  ansible.builtin.copy:
+    dest: "{{ item.dest }}"
+    content: "{{ item.value }}"
+    owner: root
+    group: root
+    mode: "0600"
+  loop: "{{ native_stack_secret_files | selectattr('value', 'ne', '') | list }}"
+  loop_control:
+    label: "{{ item.dest }}"
+  no_log: true
+  vars:
+    native_stack_secret_files:
+      - dest: /etc/postgres/postgres_password
+        value: "{{ lookup('ansible.builtin.env', 'POSTGRES_PASSWORD') }}"
+      - dest: /etc/litellm/litellm_master_key
+        value: "{{ lookup('ansible.builtin.env', 'LITELLM_MASTER_KEY') }}"
+      - dest: /etc/litellm/anthropic_api_key
+        value: "{{ lookup('ansible.builtin.env', 'ANTHROPIC_API_KEY') }}"
+      - dest: /etc/litellm/azure_client_secret
+        value: "{{ lookup('ansible.builtin.env', 'AZURE_CLIENT_SECRET') }}"
+      - dest: /etc/litellm/database_url
+        value: "{{ lookup('ansible.builtin.env', 'DATABASE_URL') }}"
+      - dest: /etc/policy-gateway/litellm_virtual_key
+        value: "{{ lookup('ansible.builtin.env', 'LITELLM_VIRTUAL_KEY') }}"
+      - dest: /etc/policy-gateway/audit_database_url
+        value: "{{ lookup('ansible.builtin.env', 'AUDIT_DATABASE_URL') }}"
+      - dest: /etc/open-webui/webui_secret_key
+        value: "{{ lookup('ansible.builtin.env', 'WEBUI_SECRET_KEY') }}"
+      - dest: /etc/open-webui/microsoft_client_secret
+        value: "{{ lookup('ansible.builtin.env', 'MICROSOFT_CLIENT_SECRET') }}"
+      - dest: /etc/open-webui/litellm_virtual_key
+        value: "{{ lookup('ansible.builtin.env', 'LITELLM_VIRTUAL_KEY') }}"
+      - dest: /etc/cloudflared/credentials.json
+        value: "{{ lookup('ansible.builtin.env', 'CLOUDFLARED_CREDENTIALS_JSON') }}"
+
+- name: Create the LUKS Postgres directory
+  ansible.builtin.file:
+    path: /var/lib/local-ai-stack/postgres
+    state: directory
+    owner: postgres
+    group: postgres
+    mode: "0700"
+
+- name: Read fstab
+  ansible.builtin.slurp:
+    src: /etc/fstab
+  register: native_stack_fstab
+
+- name: Look for a packaged Postgres cluster
+  ansible.builtin.find:
+    paths: /var/lib/postgresql
+    patterns: PG_VERSION
+    recurse: true
+  register: native_stack_pg_stock
+
+- name: Look for a Postgres cluster on the LUKS volume
+  ansible.builtin.find:
+    paths: /var/lib/local-ai-stack/postgres
+    patterns: PG_VERSION
+    recurse: true
+  register: native_stack_pg_luks
+
+- name: Stop postgresql before moving its data directory
+  ansible.builtin.systemd:
+    name: postgresql.service
+    state: stopped
+  when:
+    - native_stack_fstab.content | b64decode is not search(native_stack_pg_bind_marker)
+    - native_stack_pg_stock.matched | int > 0
+    - native_stack_pg_luks.matched | int == 0
+
+- name: Copy the packaged cluster onto the LUKS volume
+  ansible.builtin.command:
+    argv:
+      - cp
+      - -a
+      - /var/lib/postgresql/.
+      - /var/lib/local-ai-stack/postgres/
+  when:
+    - native_stack_fstab.content | b64decode is not search(native_stack_pg_bind_marker)
+    - native_stack_pg_stock.matched | int > 0
+    - native_stack_pg_luks.matched | int == 0
+  changed_when: true
+
+- name: Bind the LUKS Postgres directory over the packaged path
+  ansible.posix.mount:
+    src: /var/lib/local-ai-stack/postgres
+    path: /var/lib/postgresql
+    fstype: none
+    opts: bind
+    state: mounted
+
+- name: Read the Postgres cluster version
+  ansible.builtin.command:
+    argv:
+      - pg_lsclusters
+      - --no-header
+  register: native_stack_pg_clusters
+  changed_when: false
+
+- name: Record the Postgres major version
+  ansible.builtin.set_fact:
+    native_stack_pg_version: "{{ native_stack_pg_clusters.stdout_lines[0].split()[0] }}"
+
+- name: Ensure the Postgres conf.d directory
+  ansible.builtin.file:
+    path: "/etc/postgresql/{{ native_stack_pg_version }}/main/conf.d"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Pin Postgres to loopback
+  ansible.builtin.copy:
+    dest: "/etc/postgresql/{{ native_stack_pg_version }}/main/conf.d/local-ai.conf"
+    content: "listen_addresses = '127.0.0.1'\n"
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart postgresql
+
+- name: Apply Postgres configuration
+  ansible.builtin.meta: flush_handlers
+
+- name: Start Postgres on the LUKS volume
+  ansible.builtin.systemd:
+    name: postgresql.service
+    enabled: true
+    state: started
+    daemon_reload: true
+
+- name: Check for the Postgres password file
+  ansible.builtin.stat:
+    path: /etc/postgres/postgres_password
+  register: native_stack_pg_password_file
+
+- name: Read the Postgres password file
+  ansible.builtin.slurp:
+    src: /etc/postgres/postgres_password
+  register: native_stack_pg_password
+  no_log: true
+  when: native_stack_pg_password_file.stat.exists
+
+- name: Ensure the litellm database and audit schema
+  ansible.builtin.command:
+    argv:
+      - runuser
+      - -u
+      - postgres
+      - --
+      - /opt/policy-gateway/venv/bin/python
+      - /opt/local-ai-stack/scripts/ensure_postgres.py
+  environment:
+    POSTGRES_PASSWORD: >-
+      {{
+        native_stack_pg_password.content | b64decode
+        if native_stack_pg_password.content is defined
+        else ''
+      }}
+    AUDIT_SCHEMA: /opt/local-ai-stack/postgres/init/001-audit.sql
+  no_log: true
+  when: native_stack_pg_password_file.stat.exists
+  changed_when: false
+
+- name: Create systemd drop-in directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  loop:
+    - /etc/systemd/system/caddy.service.d
+    - /etc/systemd/system/postgresql@.service.d
+    - /etc/systemd/system/litellm.service.d
+
+- name: Install native systemd units
+  ansible.builtin.copy:
+    src: "{{ local_ai_repo_root }}/{{ item.src }}"
+    dest: "{{ item.dest }}"
+    owner: root
+    group: root
+    mode: "0644"
+  loop: "{{ native_stack_units }}"
+  loop_control:
+    label: "{{ item.dest }}"
+  notify: Reload systemd
+
+- name: Set the Caddy bind address
+  ansible.builtin.template:
+    src: caddy-bind.conf.j2
+    dest: /etc/systemd/system/caddy.service.d/20-bind.conf
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Reload systemd
+
+- name: Allow LiteLLM to reach the Azure OpenAI host
+  ansible.builtin.template:
+    src: litellm-azure.conf.j2
+    dest: /etc/systemd/system/litellm.service.d/azure.conf
+    owner: root
+    group: root
+    mode: "0644"
+  when: local_ai_azure_api_host | length > 0
+  notify: Reload systemd
+
+- name: Remove the Azure host allow when unset
+  ansible.builtin.file:
+    path: /etc/systemd/system/litellm.service.d/azure.conf
+    state: absent
+  when: local_ai_azure_api_host | length == 0
+  notify: Reload systemd
+
+- name: Create the LAN web UI certificate
+  ansible.builtin.command:
+    argv:
+      - openssl
+      - req
+      - -x509
+      - -newkey
+      - rsa:2048
+      - -nodes
+      - -keyout
+      - /var/lib/local-ai-stack/certs/webui.key
+      - -out
+      - /var/lib/local-ai-stack/certs/webui.crt
+      - -days
+      - "825"
+      - -subj
+      - /CN=webui.lan.internal
+    creates: /var/lib/local-ai-stack/certs/webui.key
+
+- name: Restrict the LAN web UI key
+  ansible.builtin.file:
+    path: /var/lib/local-ai-stack/certs/webui.key
+    state: file
+    owner: root
+    group: root
+    mode: "0600"
+
+- name: Publish the LAN web UI certificate
+  ansible.builtin.file:
+    path: /var/lib/local-ai-stack/certs/webui.crt
+    state: file
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Apply unit changes before enabling services
+  ansible.builtin.meta: flush_handlers
+
+- name: Enable native stack units
+  ansible.builtin.systemd:
+    name: "{{ item }}"
+    enabled: true
+    daemon_reload: true
+  loop: "{{ native_stack_enabled_units }}"
+
+- name: Enable the chat retention timer
+  ansible.builtin.systemd:
+    name: local-ai-retention.timer
+    enabled: true
+    state: started
+    daemon_reload: true

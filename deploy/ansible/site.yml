@@ -1,0 +1,11 @@
+---
+- name: Install the native local AI stack
+  hosts: local_ai
+  become: true
+  roles:
+    - base_hardening
+    - native_stack
+    - wireguard
+    - cloudflared_admin_nonphi
+    - firewall
+    - backups

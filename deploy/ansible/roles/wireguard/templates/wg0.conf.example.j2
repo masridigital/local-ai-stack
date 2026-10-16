@@ -1,0 +1,15 @@
+# Example only. Copy to /etc/wireguard/wg0.conf and set mode 0600 on the host.
+# The private key stays in that file. Do not commit one.
+# Ansible installs the wireguard package and does not start a tunnel
+# unless /etc/wireguard/wg0.conf already exists.
+# Set WIREGUARD_LISTEN_PORT to open the UDP ingress port.
+
+[Interface]
+Address = {{ wireguard_address }}
+{% if wireguard_peers | length > 0 %}
+
+[Peer]
+Endpoint = {{ wireguard_peers[0].endpoint }}
+AllowedIPs = {{ wireguard_peers[0].allowed_ips }}
+PersistentKeepalive = {{ wireguard_peers[0].keepalive }}
+{% endif %}

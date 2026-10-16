@@ -1,0 +1,22 @@
+---
+- name: Reload systemd
+  ansible.builtin.systemd:
+    daemon_reload: true
+
+- name: Restart postgresql
+  ansible.builtin.systemd:
+    name: postgresql.service
+    state: restarted
+    daemon_reload: true
+
+- name: Hand the embedding cache to openwebui
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: openwebui
+    group: openwebui
+    mode: "0700"
+    recurse: true
+  loop:
+    - /var/lib/local-ai-stack/webui/hf
+    - /var/lib/local-ai-stack/webui/st

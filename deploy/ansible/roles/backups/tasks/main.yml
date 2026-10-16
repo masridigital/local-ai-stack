@@ -1,0 +1,89 @@
+---
+- name: Install restic
+  ansible.builtin.apt:
+    name: restic
+    state: present
+
+- name: Create restic directories
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "{{ item.mode }}"
+  loop:
+    - { path: /etc/restic, mode: "0700" }
+    - { path: /var/lib/local-ai-stack/backups, mode: "0700" }
+    - { path: /var/lib/local-ai-stack/backups/cache, mode: "0700" }
+    - { path: /var/lib/local-ai-stack/backups/staging, mode: "0700" }
+    - { path: /var/lib/local-ai-stack/backups/restore-test, mode: "0700" }
+    - { path: /usr/local/sbin, mode: "0755" }
+  loop_control:
+    label: "{{ item.path }}"
+
+- name: Install the restic password when provided
+  ansible.builtin.copy:
+    dest: "{{ backups_password_file }}"
+    content: "{{ backups_password }}"
+    owner: root
+    group: root
+    mode: "0600"
+  no_log: true
+  when: backups_password | length > 0
+
+- name: Install the restic environment file
+  ansible.builtin.template:
+    src: local-ai.env.j2
+    dest: "{{ backups_env_file }}"
+    owner: root
+    group: root
+    mode: "0600"
+  no_log: true
+
+- name: Install restic scripts
+  ansible.builtin.copy:
+    src: "{{ local_ai_repo_root }}/deploy/backup/{{ item.src }}"
+    dest: "{{ item.dest }}"
+    owner: root
+    group: root
+    mode: "0750"
+  loop:
+    - src: restic-backup.sh
+      dest: /usr/local/sbin/local-ai-restic-backup
+    - src: restic-restore-test.sh
+      dest: /usr/local/sbin/local-ai-restic-restore-test
+  loop_control:
+    label: "{{ item.dest }}"
+
+- name: Install restic systemd units
+  ansible.builtin.template:
+    src: "{{ item.src }}"
+    dest: "{{ item.dest }}"
+    owner: root
+    group: root
+    mode: "0644"
+  loop:
+    - src: restic-backup.service.j2
+      dest: /etc/systemd/system/restic-backup.service
+    - src: restic-backup.timer.j2
+      dest: /etc/systemd/system/restic-backup.timer
+    - src: restic-restore-test.service.j2
+      dest: /etc/systemd/system/restic-restore-test.service
+    - src: restic-restore-test.timer.j2
+      dest: /etc/systemd/system/restic-restore-test.timer
+  loop_control:
+    label: "{{ item.dest }}"
+  notify: Reload backup units
+
+- name: Apply backup unit changes
+  ansible.builtin.meta: flush_handlers
+
+- name: Enable the backup and restore-test timers
+  ansible.builtin.systemd:
+    name: "{{ item }}"
+    enabled: true
+    state: started
+    daemon_reload: true
+  loop:
+    - restic-backup.timer
+    - restic-restore-test.timer

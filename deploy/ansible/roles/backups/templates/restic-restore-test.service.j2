@@ -1,0 +1,21 @@
+[Unit]
+Description=Quarterly restic restore test
+Requires=restic-backup.service
+After=restic-backup.service network-online.target
+
+[Service]
+Type=oneshot
+Environment=HOME=/var/lib/local-ai-stack/backups
+EnvironmentFile={{ backups_env_file }}
+ExecStart=/usr/local/sbin/local-ai-restic-restore-test
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/lib/local-ai-stack/backups
+ReadOnlyPaths=/etc/restic
+CapabilityBoundingSet=
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

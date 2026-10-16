@@ -1,0 +1,7 @@
+---
+- name: Restart WireGuard
+  ansible.builtin.systemd:
+    name: wg-quick@wg0.service
+    state: restarted
+    daemon_reload: true
+  when: wireguard_config is defined and wireguard_config.stat.exists

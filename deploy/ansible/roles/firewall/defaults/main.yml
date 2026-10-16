@@ -1,0 +1,5 @@
+---
+# Outbound allows are owner-matched rules from deploy/egress-destinations.yaml.
+# This role does not add global "ufw allow out" rules. cloudflared stays denied
+# while that destination is enabled: false.
+firewall_logging: "low"

@@ -1,0 +1,9 @@
+---
+local_ai_repo_root: "{{ playbook_dir }}/../.."
+local_ai_data_root: /var/lib/local-ai-stack
+local_ai_vpn_bind_ip: "{{ lookup('ansible.builtin.env', 'VPN_BIND_IP') | default('127.0.0.1', true) }}"
+local_ai_vpn_ssh_cidr: "{{ lookup('ansible.builtin.env', 'VPN_SSH_CIDR') | default('', true) }}"
+local_ai_wireguard_listen_port: "{{ lookup('ansible.builtin.env', 'WIREGUARD_LISTEN_PORT') | default('', true) }}"
+local_ai_azure_api_host: "{{ lookup('ansible.builtin.env', 'AZURE_API_HOST') | default('', true) }}"
+local_ai_apply_ssh_hardening: "{{ lookup('ansible.builtin.env', 'APPLY_SSH_HARDENING') | default('0', true) }}"
+local_ai_allow_embedding_download: "{{ lookup('ansible.builtin.env', 'ALLOW_EMBEDDING_DOWNLOAD') | default('1', true) }}"

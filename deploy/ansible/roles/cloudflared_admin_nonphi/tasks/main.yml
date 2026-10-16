@@ -1,0 +1,64 @@
+---
+- name: Install cloudflared from apt
+  ansible.builtin.apt:
+    name: cloudflared
+    state: present
+
+- name: Create the cloudflared system user
+  ansible.builtin.user:
+    name: cloudflared
+    system: true
+    shell: /usr/sbin/nologin
+    create_home: false
+
+- name: Create the cloudflared config directory
+  ansible.builtin.file:
+    path: /etc/cloudflared
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Require a terminal 404 ingress rule
+  ansible.builtin.assert:
+    that:
+      - cloudflared_admin_nonphi_ingress | length > 0
+      - (cloudflared_admin_nonphi_ingress | last).service == 'http_status:404'
+      - (cloudflared_admin_nonphi_ingress | last).hostname is not defined
+    fail_msg: The last cloudflared ingress rule must be a catch-all http_status:404 with no hostname.
+
+- name: Refuse tunnel routes to PHI services
+  ansible.builtin.assert:
+    that:
+      - not (cloudflared_admin_nonphi_ingress | to_json is search(item))
+    fail_msg: >-
+      cloudflared is admin and non-PHI only. Do not route Open WebUI, LiteLLM,
+      the policy gateway, or Presidio through Cloudflare.
+  loop: "{{ cloudflared_admin_nonphi_phi_patterns }}"
+  loop_control:
+    label: "{{ item }}"
+
+- name: Install the cloudflared sink config
+  ansible.builtin.template:
+    src: config.yml.j2
+    dest: /etc/cloudflared/config.yml
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart cloudflared
+
+- name: Install the cloudflared unit
+  ansible.builtin.template:
+    src: cloudflared.service.j2
+    dest: /etc/systemd/system/cloudflared.service
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart cloudflared
+
+- name: Leave cloudflared disabled unless explicitly enabled
+  ansible.builtin.systemd:
+    name: cloudflared.service
+    enabled: "{{ cloudflared_admin_nonphi_enabled | bool }}"
+    state: "{{ 'started' if (cloudflared_admin_nonphi_enabled | bool) else 'stopped' }}"
+    daemon_reload: true

@@ -1,0 +1,76 @@
+---
+native_stack_pg_bind_marker: "/var/lib/local-ai-stack/postgres /var/lib/postgresql"
+native_stack_requirement_files:
+  - requirements/presidio-analyzer.txt
+  - requirements/presidio-anonymizer.txt
+  - requirements/spacy-model.txt
+  - requirements/litellm.txt
+  - requirements/policy-gateway.txt
+  - requirements/open-webui.txt
+native_stack_venvs:
+  - dest: /opt/presidio-analyzer
+    requirements:
+      - presidio-analyzer.txt
+      - spacy-model.txt
+  - dest: /opt/presidio-anonymizer
+    requirements:
+      - presidio-anonymizer.txt
+  - dest: /opt/litellm
+    requirements:
+      - litellm.txt
+  - dest: /opt/policy-gateway
+    requirements:
+      - policy-gateway.txt
+  - dest: /opt/open-webui
+    requirements:
+      - open-webui.txt
+native_stack_trees:
+  - src: stack
+    dest: /opt/policy-gateway/stack
+  - src: litellm
+    dest: /opt/policy-gateway/litellm
+  - src: presidio
+    dest: /opt/policy-gateway/presidio
+  - src: presidio/server/analyzer
+    dest: /opt/presidio-analyzer/server
+  - src: presidio/server/anonymizer
+    dest: /opt/presidio-anonymizer/server
+  - src: postgres/init
+    dest: /opt/local-ai-stack/postgres/init
+native_stack_units:
+  - src: deploy/systemd/presidio-analyzer.service
+    dest: /etc/systemd/system/presidio-analyzer.service
+  - src: deploy/systemd/presidio-anonymizer.service
+    dest: /etc/systemd/system/presidio-anonymizer.service
+  - src: deploy/systemd/litellm.service
+    dest: /etc/systemd/system/litellm.service
+  - src: deploy/systemd/policy-gateway.service
+    dest: /etc/systemd/system/policy-gateway.service
+  - src: deploy/systemd/open-webui.service
+    dest: /etc/systemd/system/open-webui.service
+  - src: deploy/systemd/local-ai-stack.target
+    dest: /etc/systemd/system/local-ai-stack.target
+  - src: deploy/systemd/local-ai-retention.service
+    dest: /etc/systemd/system/local-ai-retention.service
+  - src: deploy/systemd/local-ai-retention.timer
+    dest: /etc/systemd/system/local-ai-retention.timer
+  - src: deploy/systemd/caddy.service.d.conf
+    dest: /etc/systemd/system/caddy.service.d/10-hardening.conf
+  - src: deploy/systemd/postgresql.service.d.conf
+    dest: /etc/systemd/system/postgresql@.service.d/10-hardening.conf
+native_stack_enabled_units:
+  - postgresql.service
+  - presidio-analyzer.service
+  - presidio-anonymizer.service
+  - litellm.service
+  - policy-gateway.service
+  - open-webui.service
+  - caddy.service
+  - local-ai-stack.target
+native_stack_config_files:
+  - src: deploy/env/litellm.env
+    dest: /etc/litellm/config.env
+  - src: deploy/env/policy-gateway.env
+    dest: /etc/policy-gateway/config.env
+  - src: deploy/env/open-webui.env
+    dest: /etc/open-webui/config.env
