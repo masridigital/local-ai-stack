@@ -89,22 +89,34 @@ def test_caddy_key_requires_exactly_one_primary():
     assert "exactly one primary key" in delayed.stderr
 
 
-def test_litellm_entra_token_host_is_not_shared_with_openwebui():
+def test_azure_uses_api_key_and_gateway_is_uid_gated():
     from scripts.egress_owners import load_destinations
 
     raw = load_destinations(ROOT / "deploy" / "egress-destinations.yaml")
-    by_name = {item["name"]: item for item in raw["destinations"]}
-    litellm = by_name["entra-litellm"]
-    assert litellm["users"] == ["litellm"]
-    assert litellm["hosts"] == ["login.microsoftonline.com"]
-    assert "litellm" not in by_name["entra"]["users"]
-    assert "login.microsoft.com" not in litellm["hosts"]
+    names = {item["name"] for item in raw["destinations"]}
+    assert "entra-litellm" not in names
+    entra = next(item for item in raw["destinations"] if item["name"] == "entra")
+    assert entra["users"] == ["openwebui"]
+    config = (ROOT / "litellm" / "config.yaml").read_text(encoding="utf-8")
+    assert "api_key: os.environ/AZURE_API_KEY" in config
+    assert "client_secret" not in config
+    assert "AZURE_CLIENT_SECRET" not in config
+    unit = (ROOT / "deploy" / "systemd" / "litellm.service").read_text(encoding="utf-8")
+    assert "LoadCredential=azure_api_key:/etc/litellm/azure_api_key" in unit
+    assert "azure_client_secret" not in unit
     owner = (ROOT / "deploy" / "ufw" / "owner.rules").read_text(encoding="utf-8")
-    assert "# litellm -> login.microsoftonline.com:443/tcp" in owner
-    assert "--uid-owner litellm -j REJECT" not in owner
+    gate = "-A ufw-before-output -m owner ! --uid-owner openwebui -d 127.0.0.1 -p tcp --dport 8088 -j REJECT"
+    assert gate in owner
+    assert owner.index(gate) < owner.index("-o lo -j ACCEPT")
+    assert "# litellm -> login.microsoftonline.com" not in owner
+    assert "--uid-owner litellm -j REJECT" in owner
     timesync = (ROOT / "deploy" / "timesyncd" / "local-ai.conf").read_text(encoding="utf-8")
     assert "NTP=ntp.ubuntu.com" in timesync
     assert "time.cloudflare.com" not in (ROOT / "deploy" / "egress-destinations.yaml").read_text(encoding="utf-8")
+    risk = (ROOT / "docs" / "residual-risk.md").read_text(encoding="utf-8")
+    assert "asserted by Open WebUI after Entra sign-in" in risk
+    assert "validates the JWT" in risk
+    assert "oid" in risk
 
 
 def test_store_purge_drops_old_audit_and_spend_rows():

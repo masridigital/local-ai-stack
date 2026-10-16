@@ -67,6 +67,7 @@ def handle_chat(
     headers: dict[str, str],
     body: dict,
     user_id: str | None,
+    user_email: str | None = None,
     policy: Policy,
     foundry: FoundryRuntime,
     presidio: PresidioClient,
@@ -74,16 +75,21 @@ def handle_chat(
     audit: AuditLog,
     mock_response: str | None = None,
 ) -> ChatResult:
+    def _record(**kwargs):
+        kwargs.setdefault("user_id", user_id)
+        kwargs["user_email"] = user_email
+        return audit.write(**kwargs)
+
     route = _normalize(path)
     if route not in {"/v1/chat/completions", "/chat/completions"}:
-        audit.write(event_type="request", decision="block", user_id=user_id, route=route, reason="route_disabled")
+        _record(event_type="request", decision="block", route=route, reason="route_disabled")
         raise PolicyError("route_disabled", "route is not enabled")
     if not user_id:
-        audit.write(event_type="request", decision="block", route=route, reason="user_identity_required")
+        _record(event_type="request", decision="block", route=route, reason="user_identity_required")
         raise PolicyError("user_identity_required", "Entra user id is required")
     header = blocked_header(headers, policy)
     if header:
-        audit.write(
+        _record(
             event_type="request",
             decision="block",
             user_id=user_id,
@@ -92,7 +98,7 @@ def handle_chat(
         )
         raise PolicyError("beta_header_blocked", "beta or blocked header rejected")
     if body.get("stream") is True or policy.streaming_enabled:
-        audit.write(
+        _record(
             event_type="request",
             decision="block",
             user_id=user_id,
@@ -101,11 +107,11 @@ def handle_chat(
         )
         raise PolicyError("streaming_disabled", "streaming is disabled until chunk masking is proven")
     if "tools" in body or "tool_choice" in body or blocked_tools(body, policy):
-        audit.write(event_type="request", decision="block", user_id=user_id, route=route, reason="tool_blocked")
+        _record(event_type="request", decision="block", user_id=user_id, route=route, reason="tool_blocked")
         raise PolicyError("tool_blocked", "server-side tools and tool calls are blocked")
     extras = unexpected_params(body, policy)
     if extras:
-        audit.write(event_type="request", decision="block", user_id=user_id, route=route, reason="param_not_allowlisted")
+        _record(event_type="request", decision="block", user_id=user_id, route=route, reason="param_not_allowlisted")
         raise PolicyError("param_not_allowlisted", "request contains parameters outside the allowlist")
     model = body.get("model")
     if not isinstance(model, str):
@@ -115,7 +121,7 @@ def handle_chat(
         backend = classify_model(provider_model, policy, foundry)
         team_id = resolve_entra_team(headers, litellm_model, provider_model, policy)
     except PolicyError as exc:
-        audit.write(
+        _record(
             event_type="request",
             decision="block",
             user_id=user_id,
@@ -130,7 +136,7 @@ def handle_chat(
     try:
         masked_messages, entities = _mask_messages(messages, presidio)
     except (PresidioUnavailable, PolicyError) as exc:
-        audit.write(
+        _record(
             event_type="request",
             decision="block",
             user_id=user_id,
@@ -168,7 +174,7 @@ def handle_chat(
             masked_contents.append(masked_content)
             response_entities.extend(found)
     except (PresidioUnavailable, PolicyError) as exc:
-        audit.write(
+        _record(
             event_type="request",
             decision="block",
             user_id=user_id,
@@ -182,7 +188,7 @@ def handle_chat(
         raise PolicyError("presidio_unavailable", "response blocked because post-call masking failed", status=503) from exc
     prompt_redacted = _join_content(masked_messages)
     response_redacted = "\n".join(masked_contents)
-    audit.write(
+    _record(
         event_type="request",
         decision="allow",
         user_id=user_id,

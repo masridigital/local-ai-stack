@@ -104,6 +104,7 @@ def _chat(backend, policy, presidio, audit, **overrides):
             headers=headers,
             body=body,
             user_id=overrides.pop("user_id", USER),
+            user_email=overrides.pop("user_email", None),
             policy=_policy_for(policy, backend),
             foundry=_foundry(),
             presidio=presidio,
@@ -594,6 +595,25 @@ def test_egress_default_deny():
     assert "mcp.example" in opened
     assert "--uid-owner policy-gateway -d" not in opened
     assert "--uid-owner policy-gateway -p tcp --dport 443 -j ACCEPT" not in opened
+
+
+def test_audit_records_email_and_rejects_missing_user_id(policy, presidio_services, audit):
+    client, _, _ = presidio_services
+    email = "pilot@example.invalid"
+    result, _upstream = _chat("azure", policy, client, audit, user_email=email)
+    assert result.status == 200
+    row = audit.rows()[-1]
+    assert row["user_id"] == USER
+    assert row["user_email"] == email
+    assert row["decision"] == "allow"
+    assert email not in (row["prompt_redacted"] or "")
+    blocked, _upstream = _chat("azure", policy, client, audit, user_id=None, user_email=email)
+    assert isinstance(blocked, PolicyError)
+    assert blocked.code == "user_identity_required"
+    denied = audit.rows()[-1]
+    assert denied["reason"] == "user_identity_required"
+    assert denied["user_id"] is None
+    assert denied["user_email"] == email
 
 
 def test_gateway_forwards_litellm_names_and_masks_fields(policy, presidio_services, audit):

@@ -30,6 +30,12 @@ LITELLM_DENY = (
     "-A ufw-before-output -m owner --uid-owner openwebui -d 127.0.0.2 -p tcp --dport 4000 -j REJECT",
     "-A ufw-before-output -m owner --uid-owner openwebui -d 127.0.0.1 -p tcp --dport 4000 -j REJECT",
 )
+# Only the openwebui uid may open the policy gateway. This is spliced ahead of
+# the loopback accept, which would otherwise allow every local uid.
+GATEWAY_UID_GATE = (
+    "-A ufw-before-output -m owner ! --uid-owner openwebui -d 127.0.0.1 -p tcp --dport 8088 -j REJECT",
+    "-A ufw-before-output -m owner ! --uid-owner openwebui -d 127.0.0.2 -p tcp --dport 8088 -j REJECT",
+)
 
 
 def load_destinations(path: Path) -> dict:
@@ -131,6 +137,7 @@ def render_owner_rules(raw: dict, resolutions: dict[str, list[str]], env: dict[s
     lines.append(
         "-A ufw-before-output -d 127.0.0.1 -p tcp --dport 8891 -m owner ! --uid-owner policy-gateway -j REJECT"
     )
+    lines.extend(GATEWAY_UID_GATE)
     lines.append("-A ufw-before-output -o lo -j ACCEPT")
     lines.append(f"-A ufw-before-output -m owner --uid-owner {PROXY_USER} -p tcp --dport 80 -j ACCEPT")
     lines.append(f"-A ufw-before-output -m owner --uid-owner {PROXY_USER} -p tcp --dport 443 -j ACCEPT")

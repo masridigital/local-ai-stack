@@ -17,12 +17,6 @@ destinations:
     port: 443
     proto: tcp
     purpose: Entra ID OIDC for Open WebUI
-  - name: entra-litellm
-    users: [litellm]
-    hosts: [login.microsoftonline.com]
-    port: 443
-    proto: tcp
-    purpose: Entra token endpoint for LiteLLM Azure client-secret login. Not Open WebUI.
   - name: ubuntu-updates
     users: [root]
     hosts:

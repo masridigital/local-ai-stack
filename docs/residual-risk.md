@@ -34,3 +34,17 @@ The adversarial fixture set (spaced MRN, dotted SSN, a name inside JSON, base64 
 - Open WebUI stores the raw prompt on the LUKS volume until the 30-day purge. That copy is ePHI inside Cap’s boundary. It is not redacted.
 
 A miss that leaves Cap’s boundary toward a no-BAA party is an incident. The assessment steps are in `docs/incident-response.md`.
+
+## Who the audit says sent the chat
+
+For this pilot, attribution is asserted by Open WebUI after Entra sign-in. The gateway stores the id and email Open WebUI forwards. It does not yet check an Entra token. Two records back that assertion: the chat-owner row in Open WebUI (the chat’s user id on the LUKS volume) and the Entra sign-in logs for tenant `f7812296-5bce-41dc-8102-b1b270e7c4c7`.
+
+After the pilot, Open WebUI forwards the Entra token, the gateway validates the JWT, and the audit user id is the `oid` claim.
+
+These conditions are required before deploy:
+
+1. nftables and UFW allow TCP/8088 only from the `openwebui` uid.
+2. Tools and Functions are admin-only. The admin app role is assigned only to the reviewed group `local-ai-admins`.
+3. Sign-in is Entra only. The password form is off. The gateway rejects a missing user id. The audit row stores both email and id.
+4. This section is the statement of how attribution works, including the post-pilot JWT plan above.
+5. The gateway client key is rotated when `local-ai-admins` membership changes. See `docs/entra-sso.md`.

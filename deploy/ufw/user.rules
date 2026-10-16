@@ -5,8 +5,6 @@ default deny outgoing
 # user openwebui
 allow out to login.microsoftonline.com port 443 proto tcp
 allow out to login.microsoft.com port 443 proto tcp
-# user litellm
-allow out to login.microsoftonline.com port 443 proto tcp
 # user root
 allow out to archive.ubuntu.com port 80 proto tcp
 allow out to archive.ubuntu.com port 443 proto tcp

@@ -26,9 +26,9 @@ read_cred() {
 }
 
 LITELLM_MASTER_KEY="$(read_cred litellm_master_key)"
-AZURE_CLIENT_SECRET="$(read_cred azure_client_secret)"
+AZURE_API_KEY="$(read_cred azure_api_key)"
 DATABASE_URL="$(read_cred database_url)"
-export LITELLM_MASTER_KEY AZURE_CLIENT_SECRET DATABASE_URL
+export LITELLM_MASTER_KEY AZURE_API_KEY DATABASE_URL
 # The Anthropic key file is written only when ANTHROPIC_BAA_ENABLED=true.
 if [[ -f "${cred}/anthropic_api_key" ]]; then
   ANTHROPIC_API_KEY="$(read_cred anthropic_api_key)"

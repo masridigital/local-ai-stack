@@ -90,6 +90,11 @@ def test_open_webui_entra_group_and_no_first_admin():
     assert "OAUTH_CODE_CHALLENGE_METHOD=S256" in env
     assert "OAUTH_ALLOWED_ROLES=phi,non-phi,admin" in env
     assert "OAUTH_ADMIN_ROLES=admin" in env
+    assert "LOCAL_AI_ADMIN_GROUP=local-ai-admins" in env
+    assert "USER_PERMISSIONS_WORKSPACE_TOOLS_ACCESS=false" in env
+    assert "USER_PERMISSIONS_WORKSPACE_TOOLS_IMPORT=false" in env
+    assert "USER_PERMISSIONS_WORKSPACE_TOOLS_EXPORT=false" in env
+    assert "ENABLE_FUNCTIONS=true" in env
     assert "MICROSOFT_CLIENT_TENANT_ID=" in env
     assert "AZURE_TENANT_ID=" not in env
     assert "WEBUI_ADMIN_EMAIL=webui-bootstrap@local-ai.internal" in env
@@ -105,6 +110,9 @@ def test_open_webui_entra_group_and_no_first_admin():
     doc = (ROOT / "docs" / "entra-sso.md").read_text(encoding="utf-8")
     assert doc.lower().count("zitadel") == 1
     assert "PHI-users" in doc
+    assert "local-ai-admins" in doc
+    assert "gateway_client_key" in doc
+    assert "azure_api_key" in doc
     assert "local-ai-users" not in doc
     assert "Assignment required = Yes" in doc
     assert "Local signup only is off" in doc
@@ -160,7 +168,7 @@ def test_litellm_run_omits_missing_anthropic_key(tmp_path):
     cred = tmp_path / "cred"
     cred.mkdir()
     (cred / "litellm_master_key").write_text("master-fixture", encoding="utf-8")
-    (cred / "azure_client_secret").write_text("azure-fixture", encoding="utf-8")
+    (cred / "azure_api_key").write_text("azure-fixture", encoding="utf-8")
     (cred / "database_url").write_text("postgresql://localai@127.0.0.1/litellm", encoding="utf-8")
     capture = tmp_path / "capture"
     binary = tmp_path / "litellm"
@@ -269,7 +277,7 @@ def test_populate_secrets_are_quiet(tmp_path):
     env = os.environ.copy()
     env["HOST_SECRET_ROOT"] = str(tmp_path)
     env["MICROSOFT_CLIENT_SECRET"] = secret
-    env["AZURE_CLIENT_SECRET"] = "azure-client-fixture"
+    env["AZURE_API_KEY"] = "azure-key-fixture"
     env["LITELLM_VIRTUAL_KEY"] = "virtual-key-fixture"
     proc = subprocess.run(
         ["bash", str(ROOT / "host" / "secrets" / "populate.sh")],
@@ -289,6 +297,11 @@ def test_populate_secrets_are_quiet(tmp_path):
     copy = tmp_path / "etc" / "open-webui" / "gateway_client_key"
     assert admin.stat().st_mode & 0o777 == 0o600
     assert gateway.read_text(encoding="utf-8") == copy.read_text(encoding="utf-8")
+    azure_key = tmp_path / "etc" / "litellm" / "azure_api_key"
+    assert azure_key.read_text(encoding="utf-8") == "azure-key-fixture"
+    assert stat.S_IMODE(azure_key.stat().st_mode) == 0o600
+    assert "azure-key-fixture" not in proc.stdout
+    assert not (tmp_path / "etc" / "litellm" / "azure_client_secret").exists()
     assert not (tmp_path / "etc" / "litellm" / "anthropic_api_key").exists()
     first_admin = admin.read_bytes()
     proc = subprocess.run(
@@ -522,12 +535,23 @@ def test_nft_rejects_litellm_before_loopback_accept():
     from stack.egress import host_allowed, load_destinations
     from scripts.egress_nft import render_nft
 
+    if subprocess.run(["id", "openwebui"], check=False, capture_output=True).returncode != 0:
+        created = subprocess.run(
+            ["sudo", "useradd", "--system", "--home-dir", "/nonexistent", "--shell", "/usr/sbin/nologin", "openwebui"],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        assert created.returncode == 0, created.stderr
     rules = render_nft()
     loopback = rules.index('oifname "lo" accept')
     assert rules.index("ip daddr 127.0.0.2 tcp dport 4000 reject") < loopback
     assert rules.index("ip daddr 127.0.0.1 tcp dport 4000 reject") < loopback
     assert rules.index("tcp dport 8888 meta skuid != openwebui reject") < loopback
     assert rules.index("tcp dport 8889 meta skuid != litellm reject") < loopback
+    gateway_gate = 'ip daddr 127.0.0.1 tcp dport 8088 meta skuid != openwebui reject'
+    assert rules.index(gateway_gate) < loopback
+    assert 'ip daddr 127.0.0.2 tcp dport 8088 meta skuid != openwebui reject' in rules
     assert "meta skuid egress-proxy tcp dport { 80, 443 } accept" in rules
     assert "meta skuid systemd-resolve meta l4proto { tcp, udp } th dport 53 accept" in rules
     assert "meta skuid systemd-timesync udp dport 123 accept" in rules
@@ -629,6 +653,8 @@ def test_gateway_strips_forwarded_name_and_email(monkeypatch):
 
     def fake_handle_chat(**kwargs):
         seen["headers"] = kwargs["headers"]
+        seen["user_id"] = kwargs["user_id"]
+        seen["user_email"] = kwargs["user_email"]
         return ChatResult(200, {"ok": True})
 
     monkeypatch.setattr("stack.server.handle_chat", fake_handle_chat)
@@ -662,6 +688,8 @@ def test_gateway_strips_forwarded_name_and_email(monkeypatch):
     assert "x-openwebui-user-email" not in names
     assert "x-openwebui-user-id" in names
     assert "x-entra-app-roles" in names
+    assert seen["user_id"] == "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+    assert seen["user_email"] == "testy@example.invalid"
     stripped = strip_forwarded_identity(
         {"X-OpenWebUI-User-Name": "Testy McFakerson", "X-OpenWebUI-User-Id": "id"}
     )

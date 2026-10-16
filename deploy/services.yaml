@@ -40,7 +40,7 @@ apps:
     credentials:
       - litellm_master_key
       - anthropic_api_key
-      - azure_client_secret
+      - azure_api_key
       - database_url
   - name: policy-gateway
     user: policy-gateway
