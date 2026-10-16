@@ -1,0 +1,305 @@
+{
+  "header": "SYNTHETIC — FAKE DATA — NOT REAL PERSONS",
+  "seed": 4242,
+  "note": "Clinical prose with realistic identifier shapes. Values are fictional.",
+  "samples": [
+    {
+      "entity": "PERSON",
+      "value": "Testy McFakerson",
+      "text": "Patient Testy McFakerson arrived for a fictional follow-up."
+    },
+    {
+      "entity": "PERSON",
+      "value": "Jane Synthetic-Doe",
+      "text": "The encounter note lists Jane Synthetic-Doe as the emergency contact."
+    },
+    {
+      "entity": "PERSON",
+      "value": "Pat Placeholder",
+      "text": "Pat Placeholder signed the synthetic consent form before leaving."
+    },
+    {
+      "entity": "PERSON",
+      "value": "Testy McFakerson",
+      "text": "Face sheet names Testy McFakerson as the fictional patient of record."
+    },
+    {
+      "entity": "DOB",
+      "value": "1900-01-01",
+      "text": "Date of birth 1900-01-01 is implausible on purpose."
+    },
+    {
+      "entity": "DOB",
+      "value": "1901-02-02",
+      "text": "Alternate DOB 1901-02-02 is recorded on the header."
+    },
+    {
+      "entity": "DOB",
+      "value": "01/15/1900",
+      "text": "Face sheet lists DOB 01/15/1900 for the drill chart."
+    },
+    {
+      "entity": "DOB",
+      "value": "02/28/1901",
+      "text": "Birth date 02/28/1901 appears beside the fictional name."
+    },
+    {
+      "entity": "US_SSN",
+      "value": "000-00-0000",
+      "text": "SSN 000-00-0000 is not a real number."
+    },
+    {
+      "entity": "US_SSN",
+      "value": "666-12-3456",
+      "text": "SSN 666-12-3456 is rejected by SSA rules."
+    },
+    {
+      "entity": "US_SSN",
+      "value": "900-00-0001",
+      "text": "SSN 900-00-0001 is in the invalid range."
+    },
+    {
+      "entity": "US_SSN",
+      "value": "000.00.0000",
+      "text": "Dotted ssn 000.00.0000 uses the same invalid number."
+    },
+    {
+      "entity": "MRN",
+      "value": "MRN-SYN-0001234",
+      "text": "Chart MRN-SYN-0001234 was created for this test."
+    },
+    {
+      "entity": "MRN",
+      "value": "MRN-SYN-0009876",
+      "text": "Second chart MRN-SYN-0009876 belongs to the same drill."
+    },
+    {
+      "entity": "MRN",
+      "value": "MRN:ABC12345",
+      "text": "The labeled chart MRN:ABC12345 was issued by the demo registrar."
+    },
+    {
+      "entity": "MRN",
+      "value": "MRN-ZYX98765",
+      "text": "Handoff note cites MRN-ZYX98765 as the alternate chart key."
+    },
+    {
+      "entity": "RECORD_ID",
+      "value": "REC-SYN-000042",
+      "text": "Record REC-SYN-000042 is a fixture."
+    },
+    {
+      "entity": "RECORD_ID",
+      "value": "REC-SYN-000043",
+      "text": "Record REC-SYN-000043 is a fixture."
+    },
+    {
+      "entity": "RECORD_ID",
+      "value": "RECORD-SYN12345",
+      "text": "The archive key RECORD-SYN12345 is synthetic."
+    },
+    {
+      "entity": "RECORD_ID",
+      "value": "RECORD_FAKE999",
+      "text": "Cross-reference RECORD_FAKE999 is not a production id."
+    },
+    {
+      "entity": "ACCOUNT_ID",
+      "value": "ACCT-SYN-99990000",
+      "text": "Account ACCT-SYN-99990000 is fake."
+    },
+    {
+      "entity": "ACCOUNT_ID",
+      "value": "ACCT-SYN-99990001",
+      "text": "Account ACCT-SYN-99990001 is fake."
+    },
+    {
+      "entity": "ACCOUNT_ID",
+      "value": "ACCT-FAKE123456",
+      "text": "Billing account ACCT-FAKE123456 is a drill value."
+    },
+    {
+      "entity": "ACCOUNT_ID",
+      "value": "ACCT_SYN999900",
+      "text": "Legacy key ACCT_SYN999900 is synthetic."
+    },
+    {
+      "entity": "NPI",
+      "value": "NPI-SYN-1234567890",
+      "text": "Provider NPI-SYN-1234567890 is prefixed so it cannot be real."
+    },
+    {
+      "entity": "NPI",
+      "value": "NPI-SYN-1234567891",
+      "text": "Provider NPI-SYN-1234567891 is prefixed so it cannot be real."
+    },
+    {
+      "entity": "NPI",
+      "value": "NPI:0000000001",
+      "text": "Referring clinician NPI:0000000001 is a reserved placeholder."
+    },
+    {
+      "entity": "NPI",
+      "value": "NPI-0000000002",
+      "text": "Covering clinician NPI-0000000002 is a reserved placeholder."
+    },
+    {
+      "entity": "PHONE_NUMBER",
+      "value": "555-0197",
+      "text": "Call 555-0197 which is in the 555-01xx range."
+    },
+    {
+      "entity": "PHONE_NUMBER",
+      "value": "555-0186",
+      "text": "Call 555-0186 which is in the 555-01xx range."
+    },
+    {
+      "entity": "PHONE_NUMBER",
+      "value": "555.0104",
+      "text": "After-hours line 555.0104 is fictional."
+    },
+    {
+      "entity": "PHONE_NUMBER",
+      "value": "555 0122",
+      "text": "Front desk 555 0122 is fictional."
+    },
+    {
+      "entity": "EMAIL_ADDRESS",
+      "value": "nanderson@example.com",
+      "text": "Reach nanderson@example.com only."
+    },
+    {
+      "entity": "EMAIL_ADDRESS",
+      "value": "rgray@example.com",
+      "text": "Copy rgray@example.com only."
+    },
+    {
+      "entity": "EMAIL_ADDRESS",
+      "value": "zacharyjohnson@example.com",
+      "text": "Notify zacharyjohnson@example.com about the drill."
+    },
+    {
+      "entity": "EMAIL_ADDRESS",
+      "value": "kmoore@example.com",
+      "text": "Page kmoore@example.com if the queue stalls."
+    },
+    {
+      "entity": "LOCATION",
+      "value": "123 Fake Street",
+      "text": "Lives at 123 Fake Street, Testville, ZZ 00000."
+    },
+    {
+      "entity": "LOCATION",
+      "value": "456 Fake Avenue",
+      "text": "Mailing 456 Fake Avenue, Testville, ZZ 00000."
+    },
+    {
+      "entity": "LOCATION",
+      "value": "789 Demo Road",
+      "text": "Clinic entrance is 789 Demo Road on the campus map."
+    },
+    {
+      "entity": "LOCATION",
+      "value": "7 Example Boulevard",
+      "text": "The lab drop box is 7 Example Boulevard."
+    },
+    {
+      "entity": "CREDIT_CARD",
+      "value": "4111 1111 1111 1111",
+      "text": "Card 4111 1111 1111 1111 is the standard test PAN."
+    },
+    {
+      "entity": "CREDIT_CARD",
+      "value": "4111111111111111",
+      "text": "Card 4111111111111111 is the same PAN without spaces."
+    },
+    {
+      "entity": "CREDIT_CARD",
+      "value": "4111-1111-1111-1111",
+      "text": "Card 4111-1111-1111-1111 is the same PAN with dashes."
+    },
+    {
+      "entity": "CREDIT_CARD",
+      "value": "4111 1111 1111 1111",
+      "text": "The sandbox receipt repeats 4111 1111 1111 1111 for the drill."
+    }
+  ],
+  "chart": "Patient Testy McFakerson arrived for a fictional follow-up. Date of birth 1900-01-01 is implausible on purpose. SSN 000-00-0000 is not a real number. Chart MRN-SYN-0001234 was created for this test. Record REC-SYN-000042 is a fixture. Account ACCT-SYN-99990000 is fake. Provider NPI-SYN-1234567890 is prefixed so it cannot be real. Call 555-0197 which is in the 555-01xx range. Reach nanderson@example.com only. Lives at 123 Fake Street, Testville, ZZ 00000. Card 4111 1111 1111 1111 is the standard test PAN.",
+  "chart_values": [
+    {
+      "entity": "PERSON",
+      "value": "Testy McFakerson"
+    },
+    {
+      "entity": "DOB",
+      "value": "1900-01-01"
+    },
+    {
+      "entity": "US_SSN",
+      "value": "000-00-0000"
+    },
+    {
+      "entity": "MRN",
+      "value": "MRN-SYN-0001234"
+    },
+    {
+      "entity": "RECORD_ID",
+      "value": "REC-SYN-000042"
+    },
+    {
+      "entity": "ACCOUNT_ID",
+      "value": "ACCT-SYN-99990000"
+    },
+    {
+      "entity": "NPI",
+      "value": "NPI-SYN-1234567890"
+    },
+    {
+      "entity": "PHONE_NUMBER",
+      "value": "555-0197"
+    },
+    {
+      "entity": "EMAIL_ADDRESS",
+      "value": "nanderson@example.com"
+    },
+    {
+      "entity": "LOCATION",
+      "value": "123 Fake Street"
+    },
+    {
+      "entity": "CREDIT_CARD",
+      "value": "4111 1111 1111 1111"
+    }
+  ],
+  "negative": [
+    "ticket #24058",
+    "version v1.2.3",
+    "IP 192.0.2.10 is TEST-NET-1",
+    "the planning window is Q3 2026",
+    "build 42 passed the checklist",
+    "queue depth is twelve items"
+  ],
+  "adversarial": [
+    {
+      "entity": "MRN",
+      "value": "M R N - S Y N - 0001234",
+      "text": "identifier M R N - S Y N - 0001234 was split"
+    },
+    {
+      "entity": "US_SSN",
+      "value": "000.00.0000",
+      "text": "dotted ssn 000.00.0000"
+    },
+    {
+      "entity": "PERSON",
+      "value": "Testy McFakerson",
+      "text": "{\"patient\": \"Testy McFakerson\"}"
+    },
+    {
+      "entity": "MRN",
+      "encoding": "base64",
+      "value": "MRN-SYN-0001234",
+      "text": "attachment TVJOLVNZTi0wMDAxMjM0 end"
+    }
+  ]
+}
