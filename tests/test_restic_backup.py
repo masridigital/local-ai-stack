@@ -63,13 +63,20 @@ if command == "init":
     root.mkdir(parents=True, exist_ok=True)
     (root / "config").write_text("synthetic\\n", encoding="utf-8")
     sys.exit(0)
+root.mkdir(parents=True, exist_ok=True)
+with (root / "argv.log").open("a", encoding="utf-8") as handle:
+    handle.write(" ".join(args) + "\\n")
 if command == "backup":
-    root.mkdir(parents=True, exist_ok=True)
+    if os.environ.get("RESTIC_FAIL_BACKUP") == "1":
+        sys.exit(1)
     (root / "snap-audit").write_text("1\\n", encoding="utf-8")
     for item in positional[1:]:
         path = Path(item)
         if path.is_file() and path.name == "canary":
             (root / "canary").write_text(path.read_text(encoding="utf-8"), encoding="utf-8")
+        if path.is_file() and path.name == "litellm.dump":
+            (root / "litellm.dump").write_bytes(path.read_bytes())
+            (root / "litellm.mode").write_text(format(path.stat().st_mode & 0o777, "o"), encoding="utf-8")
     sys.exit(0)
 if command == "snapshots":
     if (root / "snap-audit").is_file():
@@ -100,6 +107,7 @@ def _run(script: Path, env_file: Path, extra: dict[str, str] | None = None) -> s
     environment.pop("RESTIC_PASSWORD", None)
     environment.pop("RESTIC_PASSWORD_FILE", None)
     environment.pop("RESTIC_PASSWORD_COMMAND", None)
+    environment.pop("LOCAL_AI_LUKS_CHECK", None)
     if extra:
         environment.update(extra)
     return subprocess.run(
@@ -218,7 +226,14 @@ def test_offhost_copy_target_is_refused(tmp_path: Path) -> None:
     assert "RESTIC_OFFSITE_REPOSITORY" in result.stderr
 
 
-def test_backup_and_restore_round_trip(tmp_path: Path) -> None:
+def _luks_ok(tmp_path: Path) -> str:
+    script = tmp_path / "luks-ok"
+    script.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    script.chmod(0o755)
+    return str(script)
+
+
+def _root_password(tmp_path: Path) -> Path:
     password_file = tmp_path / "password"
     password_file.write_text("synthetic-not-a-password\n", encoding="utf-8")
     password_file.chmod(0o600)
@@ -230,29 +245,220 @@ def test_backup_and_restore_round_trip(tmp_path: Path) -> None:
     )
     if chown.returncode != 0:
         pytest.skip("sudo -n chown is required to satisfy the root owner check")
-    assert stat.S_IMODE(password_file.stat().st_mode) == 0o600
+    return password_file
 
-    data = tmp_path / "data"
-    offsite = data / "backups" / "offsite"
+
+def _fake_restic(tmp_path: Path) -> Path:
     fake = tmp_path / "fake-restic"
     fake.write_text(FAKE_RESTIC, encoding="utf-8")
     fake.chmod(0o755)
+    return fake
+
+
+def test_backup_and_restore_round_trip(tmp_path: Path) -> None:
+    password_file = _root_password(tmp_path)
+    assert stat.S_IMODE(password_file.stat().st_mode) == 0o600
+
+    data = tmp_path / "data"
+    (data / "webui").mkdir(parents=True)
+    offsite = data / "backups" / "offsite"
+    fake = _fake_restic(tmp_path)
     env_file = _write_env(tmp_path, password_file, RESTIC_OFFSITE_REPOSITORY=str(offsite))
-    extra = {"RESTIC_BIN": str(fake)}
+    extra = {"RESTIC_BIN": str(fake), "LOCAL_AI_LUKS_CHECK": _luks_ok(tmp_path)}
 
     backup = _run(BACKUP, env_file, extra)
     assert backup.returncode == 0, backup.stderr
     assert "restic backup complete" in backup.stdout
     assert (data / "backups" / "canary").read_text(encoding="utf-8").strip() == CANARY
     assert (offsite / "config").is_file()
+    log = (data / "backups" / "repo" / "argv.log").read_text(encoding="utf-8")
+    assert "forget --tag ephi --prune --keep-within 30d" in log
+    assert "forget --tag audit --prune --keep-within 6y" in log
+    assert "--keep-daily" not in log
+    assert "--keep-yearly" not in log
 
     restore = _run(RESTORE, env_file, extra)
     assert restore.returncode == 0, restore.stderr
     assert "restic restore test passed" in restore.stdout
 
 
+def test_pg_dump_is_captured_by_root_and_then_deleted(tmp_path: Path) -> None:
+    password_file = _root_password(tmp_path)
+    data = tmp_path / "data"
+    ready = tmp_path / "pg-isready"
+    ready.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    ready.chmod(0o755)
+    runuser = tmp_path / "runuser"
+    runuser.write_text(
+        "#!/usr/bin/env python3\n"
+        "import sys\n"
+        "if '-f' in sys.argv:\n"
+        "    sys.stderr.write('pg_dump cannot open the staging path\\n')\n"
+        "    sys.exit(1)\n"
+        "if 'postgres' not in sys.argv or '-Fc' not in sys.argv:\n"
+        "    sys.stderr.write('unexpected runuser args\\n')\n"
+        "    sys.exit(2)\n"
+        "sys.stdout.buffer.write(b'PGDMP-synthetic\\n')\n",
+        encoding="utf-8",
+    )
+    runuser.chmod(0o755)
+    env_file = _write_env(tmp_path, password_file)
+    extra = {
+        "RESTIC_BIN": str(_fake_restic(tmp_path)),
+        "LOCAL_AI_LUKS_CHECK": _luks_ok(tmp_path),
+        "BACKUPS_REQUIRE_POSTGRES": "1",
+        "PG_ISREADY_BIN": str(ready),
+        "RUNUSER_BIN": str(runuser),
+        "PG_DUMP_BIN": "/usr/bin/pg_dump",
+    }
+
+    backup = _run(BACKUP, env_file, extra)
+    assert backup.returncode == 0, backup.stderr
+    dump = data / "backups" / "staging" / "litellm.dump"
+    assert not dump.exists()
+    staging = data / "backups" / "staging"
+    assert stat.S_IMODE(staging.stat().st_mode) == 0o700
+    saved = data / "backups" / "repo" / "litellm.dump"
+    assert saved.read_bytes() == b"PGDMP-synthetic\n"
+    assert (data / "backups" / "repo" / "litellm.mode").read_text(encoding="utf-8") == "600"
+    script = BACKUP.read_text(encoding="utf-8")
+    dump_lines = [line for line in script.splitlines() if "pg_dump_bin" in line and "-Fc" in line]
+    assert len(dump_lines) == 1
+    assert "-f" not in dump_lines[0]
+    assert ">" in dump_lines[0]
+
+
+def test_staged_dump_is_deleted_when_backup_fails(tmp_path: Path) -> None:
+    password_file = _root_password(tmp_path)
+    ready = tmp_path / "pg-isready"
+    ready.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    ready.chmod(0o755)
+    runuser = tmp_path / "runuser"
+    runuser.write_text(
+        "#!/bin/sh\nprintf '%s\\n' PGDMP-synthetic\n",
+        encoding="utf-8",
+    )
+    runuser.chmod(0o755)
+    env_file = _write_env(tmp_path, password_file)
+    extra = {
+        "RESTIC_BIN": str(_fake_restic(tmp_path)),
+        "LOCAL_AI_LUKS_CHECK": _luks_ok(tmp_path),
+        "BACKUPS_REQUIRE_POSTGRES": "1",
+        "PG_ISREADY_BIN": str(ready),
+        "RUNUSER_BIN": str(runuser),
+        "RESTIC_FAIL_BACKUP": "1",
+    }
+
+    backup = _run(BACKUP, env_file, extra)
+    assert backup.returncode != 0
+    assert not (tmp_path / "data" / "backups" / "staging" / "litellm.dump").exists()
+
+
+def test_unlisted_env_key_is_rejected(tmp_path: Path) -> None:
+    env_file = tmp_path / "local-ai.env"
+    env_file.write_text(
+        f"RESTIC_REPOSITORY={tmp_path / 'repo'}\nUNLISTED_TUNING=synthetic\n",
+        encoding="utf-8",
+    )
+    result = _run(BACKUP, env_file)
+    assert result.returncode != 0
+    assert "not allow-listed: UNLISTED_TUNING" in result.stderr
+
+
+def test_stretched_retention_is_rejected(tmp_path: Path) -> None:
+    env_file = _write_env(tmp_path, tmp_path / "missing-password", RESTIC_KEEP_WITHIN_AUDIT="12y")
+    result = _run(BACKUP, env_file)
+    assert result.returncode != 0
+    assert "keep-within 6y" in result.stderr
+
+    chat = _write_env(tmp_path, tmp_path / "missing-password", RESTIC_KEEP_WITHIN_EPHI="60d")
+    result = _run(BACKUP, chat)
+    assert result.returncode != 0
+    assert "keep-within 30d" in result.stderr
+
+
+def test_repository_must_be_on_dm_crypt(tmp_path: Path) -> None:
+    password_file = _root_password(tmp_path)
+    env_file = _write_env(tmp_path, password_file)
+    result = _run(BACKUP, env_file, {"RESTIC_BIN": str(_fake_restic(tmp_path))})
+    assert result.returncode != 0
+    assert "not on dm-crypt" in result.stderr
+    assert not (tmp_path / "data" / "backups" / "repo" / "config").exists()
+    assert "/opt/local-ai-stack/scripts/check_luks.py" in (ROOT / "deploy" / "backup" / "restic-env.sh").read_text(encoding="utf-8")
+
+
+def test_default_alert_route_writes_the_journal(tmp_path: Path) -> None:
+    logger = tmp_path / "logger"
+    logger.write_text(
+        "#!/bin/sh\nprintf '%s\\n' \"${RESTIC_PASSWORD:-unset}\"\nprintf '%s\\n' \"$*\"\n",
+        encoding="utf-8",
+    )
+    logger.chmod(0o755)
+    environment = os.environ.copy()
+    environment.pop("LOCAL_AI_RESTIC_ALERT_HOOK", None)
+    environment.pop("LOCAL_AI_RESTIC_ALERT_ROUTE", None)
+    environment["LOGGER_BIN"] = str(logger)
+    environment["RESTIC_PASSWORD"] = "synthetic-not-a-password"
+    result = subprocess.run(
+        ["bash", str(ALERT)],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=environment,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "unset" in result.stdout
+    assert "local-ai-restic" in result.stdout
+    assert "restic backup or restore test failed" in result.stdout
+    assert "synthetic-not-a-password" not in result.stdout
+
+
+def test_offhost_alert_mail_is_refused(tmp_path: Path) -> None:
+    sendmail = tmp_path / "sendmail"
+    sendmail.write_text("#!/bin/sh\nprintf '%s\\n' sent\n", encoding="utf-8")
+    sendmail.chmod(0o755)
+    environment = os.environ.copy()
+    environment["LOCAL_AI_RESTIC_ALERT_ROUTE"] = "mail"
+    environment["LOCAL_AI_RESTIC_ALERT_MAIL"] = "ops@example.com"
+    environment["SENDMAIL_BIN"] = str(sendmail)
+    result = subprocess.run(
+        ["bash", str(ALERT)],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=environment,
+    )
+    assert result.returncode != 0
+    assert "no egress rule" in result.stderr
+    assert "sent" not in result.stdout
+
+
+@pytest.mark.parametrize("recipient", ["root", "root@localhost"])
+def test_local_alert_mail_is_delivered_without_the_password(tmp_path: Path, recipient: str) -> None:
+    sendmail = tmp_path / "sendmail"
+    sendmail.write_text("#!/bin/sh\ncat\n", encoding="utf-8")
+    sendmail.chmod(0o755)
+    environment = os.environ.copy()
+    environment["LOCAL_AI_RESTIC_ALERT_ROUTE"] = "mail"
+    environment["LOCAL_AI_RESTIC_ALERT_MAIL"] = recipient
+    environment["SENDMAIL_BIN"] = str(sendmail)
+    environment["RESTIC_PASSWORD"] = "synthetic-not-a-password"
+    result = subprocess.run(
+        ["bash", str(ALERT)],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=environment,
+    )
+    assert result.returncode == 0, result.stderr
+    assert f"To: {recipient}" in result.stdout
+    assert "restic backup or restore test failed" in result.stdout
+    assert "synthetic-not-a-password" not in result.stdout
+
+
 def test_unconfigured_alert_hook_fails_loudly() -> None:
     environment = os.environ.copy()
+    environment["LOCAL_AI_RESTIC_ALERT_ROUTE"] = "hook"
     environment.pop("LOCAL_AI_RESTIC_ALERT_HOOK", None)
     result = subprocess.run(
         ["bash", str(ALERT)],
@@ -270,6 +476,7 @@ def test_relative_alert_hook_is_rejected(tmp_path: Path) -> None:
     hook.write_text("#!/bin/sh\nprintf '%s\\n' alert-sent\n", encoding="utf-8")
     hook.chmod(0o755)
     environment = os.environ.copy()
+    environment["LOCAL_AI_RESTIC_ALERT_ROUTE"] = "hook"
     environment["LOCAL_AI_RESTIC_ALERT_HOOK"] = hook.name
     result = subprocess.run(
         ["bash", str(ALERT)],
@@ -294,6 +501,7 @@ def test_configured_alert_hook_is_executed_without_the_password(tmp_path: Path) 
     )
     hook.chmod(0o755)
     environment = os.environ.copy()
+    environment["LOCAL_AI_RESTIC_ALERT_ROUTE"] = "hook"
     environment["LOCAL_AI_RESTIC_ALERT_HOOK"] = str(hook)
     environment["RESTIC_PASSWORD"] = "synthetic-not-a-password"
     environment["RESTIC_PASSWORD_FILE"] = "/etc/restic/password"
@@ -342,8 +550,21 @@ def test_ansible_enables_timers_only_with_a_password() -> None:
     assert "RESTIC_PASSWORD=" not in env_template
     assert "RESTIC_PASSWORD_COMMAND=" not in env_template
     assert "backups_password" not in alert_template
-    defaults = (role / "defaults" / "main.yml").read_text(encoding="utf-8")
-    assert 'backups_password: ""' in defaults
+    defaults_text = (role / "defaults" / "main.yml").read_text(encoding="utf-8")
+    assert 'backups_password: ""' in defaults_text
+    defaults = yaml.safe_load(defaults_text)
+    assert set(defaults["backups_extra_env_allow"]) == {
+        "RESTIC_COMPRESSION",
+        "RESTIC_PACK_SIZE",
+        "RESTIC_PROGRESS_FPS",
+        "RESTIC_READ_CONCURRENCY",
+        "RESTIC_CACHE_DIR",
+    }
+    assert defaults["backups_keep_within_ephi"] == "30d"
+    assert defaults["backups_keep_within_audit"] == "6y"
+    assert defaults["backups_alert_route"] == "journal"
+    assert "check_luks.py" in text
+    assert "difference(backups_extra_env_allow)" in text
     site = (ROOT / "ansible" / "site.yml").read_text(encoding="utf-8")
     assert "\n    - backups\n" in site
 

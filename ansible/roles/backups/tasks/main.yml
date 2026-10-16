@@ -31,16 +31,30 @@
   no_log: true
   when: backups_password | trim | length > 0
 
-- name: Reject restic password overrides in backups_extra_env
+- name: Allow-list backups_extra_env keys
   ansible.builtin.assert:
     that:
       - backups_extra_env is mapping
+      - backups_extra_env.keys() | difference(backups_extra_env_allow) | length == 0
       - "'RESTIC_PASSWORD' not in backups_extra_env"
       - "'RESTIC_PASSWORD_COMMAND' not in backups_extra_env"
     fail_msg: >-
-      backups_extra_env must not set RESTIC_PASSWORD or RESTIC_PASSWORD_COMMAND.
+      backups_extra_env may only set RESTIC_COMPRESSION, RESTIC_PACK_SIZE,
+      RESTIC_PROGRESS_FPS, RESTIC_READ_CONCURRENCY, and RESTIC_CACHE_DIR.
+      It must not set RESTIC_PASSWORD or RESTIC_PASSWORD_COMMAND.
       Provision backups_password from Ansible Vault so the secret stays in the
       root-only password file.
+
+- name: Require a local restic alert route
+  ansible.builtin.assert:
+    that:
+      - backups_alert_route in ['journal', 'mail', 'hook']
+      - backups_alert_route != 'mail' or backups_alert_mail | trim | length > 0
+      - backups_alert_route != 'hook' or backups_alert_hook | trim | length > 0
+      - backups_alert_mail | trim | length == 0 or backups_alert_mail | regex_search('^[A-Za-z_][A-Za-z0-9_-]*$|^[A-Za-z_][A-Za-z0-9_-]*@localhost$')
+    fail_msg: >-
+      backups_alert_route must be journal, local mail, or a hook.
+      Mail recipients stay on this host. Off-host mail has no egress rule.
 
 - name: Install the restic environment file
   ansible.builtin.template:
@@ -59,6 +73,20 @@
     group: root
     mode: "0600"
   no_log: true
+
+- name: local-ai script directory
+  ansible.builtin.file:
+    path: /opt/local-ai-stack/scripts
+    state: directory
+    mode: "0755"
+
+- name: Install the dm-crypt check
+  ansible.builtin.copy:
+    src: "{{ repo_root }}/scripts/check_luks.py"
+    dest: /opt/local-ai-stack/scripts/check_luks.py
+    owner: root
+    group: root
+    mode: "0755"
 
 - name: Install restic scripts
   ansible.builtin.copy:
