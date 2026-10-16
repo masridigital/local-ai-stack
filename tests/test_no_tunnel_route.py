@@ -1,6 +1,6 @@
 """Open WebUI and LiteLLM have no Cloudflare Tunnel route.
 
-Cap declined a Cloudflare BAA. The tunnel file is a 404 sink and the unit stays disabled.
+Cap declined a Cloudflare BAA. Main does not ship cloudflared.
 """
 
 from __future__ import annotations
@@ -10,42 +10,23 @@ from pathlib import Path
 import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
-PHI_NAMES = ("open-webui", "open_webui", "litellm", "policy-gateway", "presidio", "postgres")
-PHI_PORTS = ("8080", "4000", "8088", "3000", "3001")
 
 
-def test_cloudflared_ingress_is_only_a_404_sink():
-    text = (ROOT / "deploy" / "cloudflared" / "config.yml").read_text(encoding="utf-8")
-    document = yaml.safe_load(text)
-    ingress = document["ingress"]
-    assert ingress == [{"service": "http_status:404"}]
-    assert all("hostname" not in rule for rule in ingress)
-    lowered = text.lower()
-    for name in PHI_NAMES:
-        assert name not in lowered
-    for port in PHI_PORTS:
-        assert port not in text
-    for needle in ("trycloudflare", "argotunnel", "service: http://", "service: https://"):
-        assert needle not in lowered
-
-
-def test_tunnel_unit_and_installer_stay_disabled():
-    unit = (ROOT / "deploy" / "systemd" / "cloudflared.service").read_text(encoding="utf-8")
-    assert "IPAddressDeny=any" in unit
-    lowered = unit.lower()
-    for name in ("open-webui", "litellm", "8080", "4000"):
-        assert name not in lowered
+def test_cloudflared_is_not_shipped():
+    assert not (ROOT / "deploy" / "cloudflared").exists()
+    assert not (ROOT / "deploy" / "systemd" / "cloudflared.service").exists()
+    assert not (ROOT / "ansible" / "roles" / "cloudflared").exists()
     install = (ROOT / "deploy" / "install.sh").read_text(encoding="utf-8")
+    assert "apt-get remove -y cloudflared" in install
     assert "systemctl disable --now cloudflared.service" in install
+    assert "rm -rf /etc/cloudflared" in install
     assert "systemctl enable cloudflared" not in install
-    ansible = (ROOT / "ansible" / "roles" / "cloudflared" / "tasks" / "main.yml").read_text(encoding="utf-8")
-    assert "enabled: false" in ansible
-    assert "state: stopped" in ansible
     egress = yaml.safe_load((ROOT / "deploy" / "egress-destinations.yaml").read_text(encoding="utf-8"))
-    assert egress["cloudflared_enabled"] is False
-    tunnel_dest = next(item for item in egress["destinations"] if item["name"] == "cloudflared")
-    assert tunnel_dest["enabled"] is False
-    assert "region1.v2.argotunnel.com" in tunnel_dest["hosts"]
+    assert "cloudflared_enabled" not in egress
+    assert all(item.get("name") != "cloudflared" for item in egress["destinations"])
+    from scripts.check_tree import check
+
+    assert check() == []
 
 
 def test_open_webui_and_litellm_bind_loopback_not_a_tunnel():
@@ -53,11 +34,14 @@ def test_open_webui_and_litellm_bind_loopback_not_a_tunnel():
     assert services["runtime"] == "native"
     assert services["docker"] is False
     by_name = {app["name"]: app for app in services["apps"]}
-    for name in ("open-webui", "litellm", "policy-gateway"):
-        assert by_name[name]["bind"] == "127.0.0.1"
-    for unit_name in ("open-webui.service", "litellm.service", "policy-gateway.service"):
-        unit = (ROOT / "deploy" / "systemd" / unit_name).read_text(encoding="utf-8")
-        assert "127.0.0.1" in unit
+    assert by_name["litellm"]["bind"] == "127.0.0.2"
+    assert by_name["open-webui"]["bind"] == "127.0.0.1"
+    assert by_name["policy-gateway"]["bind"] == "127.0.0.1"
+    litellm = (ROOT / "deploy" / "systemd" / "litellm.service").read_text(encoding="utf-8")
+    assert "BIND_HOST=127.0.0.2" in litellm
+    webui_unit = (ROOT / "deploy" / "systemd" / "open-webui.service").read_text(encoding="utf-8")
+    gateway = (ROOT / "deploy" / "systemd" / "policy-gateway.service").read_text(encoding="utf-8")
+    for unit in (litellm, webui_unit, gateway):
         assert "argotunnel" not in unit
         assert "trycloudflare" not in unit
         assert "cloudflared" not in unit.lower()
@@ -68,7 +52,5 @@ def test_open_webui_and_litellm_bind_loopback_not_a_tunnel():
     assert "argotunnel" not in caddy
     webui = (ROOT / "deploy" / "env" / "open-webui.env").read_text(encoding="utf-8")
     assert "OPENAI_API_BASE_URL=http://127.0.0.1:8088/v1" in webui
+    assert ":4000" not in webui
     assert "cloudflare" not in webui.lower()
-    from scripts.check_tree import check
-
-    assert check() == []

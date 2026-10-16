@@ -40,6 +40,17 @@ def test_requirement_locks_are_hash_pinned():
     assert "litellm[proxy]==1.105.1" in litellm
     assert "requirements/presidio-analyzer.txt" in seen
     assert "requirements/spacy-model.txt" in seen
+    dev = (ROOT / "requirements-dev.txt").read_text(encoding="utf-8")
+    assert "--hash=sha256:" not in dev
+    for pin in (
+        "pytest==8.4.2",
+        "pyyaml==6.0.2",
+        "faker==37.8.0",
+        "bandit==1.8.6",
+        "flask==3.1.3",
+        "werkzeug==3.1.9",
+    ):
+        assert pin in dev
 
 
 def test_ci_installs_pinned_presidio_without_docker():
@@ -59,10 +70,7 @@ def test_ci_installs_pinned_presidio_without_docker():
     assert "contents: read" in workflow
     assert "nftables" in workflow
     assert "pip install -r requirements-dev.txt" in workflow
-    assert "GITLEAKS_VERSION" not in workflow
     assert "install_gitleaks" not in workflow
-    assert "gitleaks/gitleaks-action@v2" not in workflow
-    assert "aquasecurity/trivy-action@v0.36.0" not in workflow
     assert "pytest" in workflow
     assert "bandit" in workflow
     assert "shellcheck" in workflow

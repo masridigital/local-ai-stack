@@ -16,6 +16,16 @@ ROOT = Path(__file__).resolve().parents[1]
 MARKER = "SYNTHETIC-MARKER-not-phi"
 
 
+@pytest.fixture(autouse=True)
+def _restore_presidio_modules():
+    """These tests stub presidio_* in sys.modules. Put the real modules back."""
+    saved = {name: module for name, module in sys.modules.items() if name == "presidio_analyzer" or name.startswith("presidio_")}
+    yield
+    for name in [name for name in sys.modules if name == "presidio_analyzer" or name.startswith("presidio_")]:
+        sys.modules.pop(name, None)
+    sys.modules.update(saved)
+
+
 class _AnalyzerRequest:
     def __init__(self, payload):
         payload = payload or {}

@@ -53,10 +53,13 @@ def run_chat(
     }
     if body:
         payload.update(body)
+    merged_headers = {"X-Entra-App-Roles": "phi"}
+    if headers:
+        merged_headers.update(headers)
     try:
         result = handle_chat(
             path=path,
-            headers=headers or {},
+            headers=merged_headers,
             body=payload,
             user_id=user_id,
             policy=policy,

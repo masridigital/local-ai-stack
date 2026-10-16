@@ -47,7 +47,8 @@ def test_anthropic_model_allowlist(model, code, policy, presidio_services, audit
     if code is None:
         assert getattr(result, "status", None) == 200
         assert result.backend == "anthropic"
-        assert upstream.calls[0]["model"] == model
+        alias = next(name for name, provider in policy.model_aliases.items() if provider == model)
+        assert upstream.calls[0]["model"] == alias
         return
     assert isinstance(result, PolicyError)
     assert result.code == code

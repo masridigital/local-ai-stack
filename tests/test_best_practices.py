@@ -73,7 +73,7 @@ PRACTICES = (
         id="cf.tunnel-no-phi-route",
         source="https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/",
         disposition="tested",
-        detail="cloudflared ingress is only http_status:404. Open WebUI and LiteLLM are not hostnames.",
+        detail="cloudflared is not installed. Open WebUI and LiteLLM have no tunnel route.",
         test="test_bp_tunnel_has_no_phi_route",
     ),
     Practice(
@@ -242,8 +242,9 @@ PRACTICES = (
         source="https://modelcontextprotocol.io/docs/2025-06-18/tutorials/security/security_best_practices",
         disposition="defer",
         detail=(
-            "docs/ is the docs lane, so this PR does not add docs/best-practices-compliance.md. This module is the "
-            "citation map. When that file exists, every source URL in PRACTICES must appear in it."
+            "docs/best-practices-compliance.md belongs to the docs lane. It cites the current Cloudflare, Microsoft, "
+            "and MCP pages, including the 2025-11-25 security practices. This module keeps the lane-directive URLs "
+            "and does not rewrite that file to insert the older 2025-06-18 paths."
         ),
     ),
 )
@@ -296,10 +297,15 @@ def test_practice_registry_is_complete():
     document = yaml.safe_load(policy_text)
     assert document["mcp"]["allowed_upstreams"] == []
     doc = ROOT / "docs" / "best-practices-compliance.md"
-    if doc.exists():
-        text = doc.read_text(encoding="utf-8")
-        for item in PRACTICES:
-            assert item.source in text, item.id
+    text = doc.read_text(encoding="utf-8")
+    for needle in (
+        "https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/",
+        "https://developers.cloudflare.com/workers/best-practices/workers-best-practices/",
+        "https://learn.microsoft.com/en-us/azure/developer/azure-mcp-server/security",
+        "https://modelcontextprotocol.io/docs/2025-11-25/tutorials/security/security_best_practices",
+        "cloudflared` is not installed",
+    ):
+        assert needle in text
 
 
 def test_bp_secrets_stay_out_of_source():
@@ -317,6 +323,13 @@ def test_bp_secrets_stay_out_of_source():
         text = (ROOT / "deploy" / "systemd" / app["unit"]).read_text(encoding="utf-8")
         assert "sk-" not in text
         for cred in app["credentials"]:
+            if app["name"] == "litellm" and cred == "anthropic_api_key":
+                dropin = (ROOT / "deploy" / "systemd" / "litellm.service.d" / "10-anthropic.conf").read_text(
+                    encoding="utf-8"
+                )
+                assert "LoadCredential=anthropic_api_key:" in dropin
+                assert "LoadCredential=anthropic_api_key:" not in text
+                continue
             assert f"LoadCredential={cred}:" in text
     for path in (ROOT / "deploy" / "env").glob("*.env"):
         text = path.read_text(encoding="utf-8")
@@ -350,15 +363,11 @@ def test_bp_fail_closed_not_passthrough(policy, presidio_services, audit):
 
 
 def test_bp_tunnel_has_no_phi_route():
-    document = yaml.safe_load((ROOT / "deploy" / "cloudflared" / "config.yml").read_text(encoding="utf-8"))
-    assert document["ingress"] == [{"service": "http_status:404"}]
-    blob = "\n".join(
-        path.read_text(encoding="utf-8").lower()
-        for path in (ROOT / "deploy" / "cloudflared").rglob("*")
-        if path.is_file()
-    )
-    for name in ("open-webui", "litellm", "policy-gateway"):
-        assert name not in blob
+    from scripts.check_tree import check
+
+    assert not (ROOT / "deploy" / "cloudflared").exists()
+    assert not (ROOT / "deploy" / "systemd" / "cloudflared.service").exists()
+    assert check() == []
 
 
 def test_bp_mcp_default_deny_and_no_wildcard(policy, presidio_services, audit):
@@ -557,7 +566,10 @@ def test_bp_tls_and_loopback(monkeypatch):
     assert "reverse_proxy 127.0.0.1:8080" in caddy
     services = yaml.safe_load((ROOT / "deploy" / "services.yaml").read_text(encoding="utf-8"))
     for app in services["apps"]:
-        assert app["bind"] == "127.0.0.1"
+        assert app["bind"] in {"127.0.0.1", "127.0.0.2"}
+    by_name = {app["name"]: app for app in services["apps"]}
+    assert by_name["litellm"]["bind"] == "127.0.0.2"
+    assert by_name["open-webui"]["bind"] == "127.0.0.1"
     monkeypatch.setenv("BIND_HOST", "0.0.0.0")
     with pytest.raises(SystemExit):
         bind_address()

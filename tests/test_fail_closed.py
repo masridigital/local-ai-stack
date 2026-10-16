@@ -126,10 +126,17 @@ class _Gateway:
 
     def post(self, path: str, body, headers: dict | None = None):
         payload = body if isinstance(body, bytes) else json.dumps(body).encode("utf-8")
+        sent = {
+            "Content-Type": "application/json",
+            "Authorization": "Bearer gateway-test-key",
+            "X-Entra-App-Roles": "phi",
+        }
+        if headers:
+            sent.update(headers)
         request = urllib.request.Request(
             self.url + path,
             data=payload,
-            headers={"Content-Type": "application/json", **(headers or {})},
+            headers=sent,
             method="POST",
         )
         try:
@@ -162,6 +169,7 @@ def gateway(tmp_path, monkeypatch, recognizers, policy):
     monkeypatch.setenv("AZURE_API_BASE", "https://cap-eastus2.openai.azure.com/")
     _policy, foundry, presidio, audit = build_deps()
     httpd = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    httpd.gateway_client_key = "gateway-test-key"  # type: ignore[attr-defined]
     httpd.deps = (_policy, foundry, presidio, audit)  # type: ignore[attr-defined]
     upstream = Upstream()
     httpd.upstream = upstream  # type: ignore[attr-defined]
